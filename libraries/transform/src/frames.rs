@@ -141,7 +141,9 @@ impl FrameDict {
             Some(Value::Mapping(map)) => {
                 for (bad, good) in map {
                     let (Some(bad), Some(good)) = (bad.as_str(), good.as_str()) else {
-                        return invalid("rejected_names must map an upstream name to a frame".into());
+                        return invalid(
+                            "rejected_names must map an upstream name to a frame".into(),
+                        );
                     };
                     if frames.contains_key(bad) {
                         return invalid(format!("'{bad}' is both a frame and a rejected name"));

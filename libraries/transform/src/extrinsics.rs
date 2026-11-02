@@ -40,11 +40,7 @@ const REQUIRED: [&str; 5] = [
     "transforms",
 ];
 
-fn numbers<const N: usize>(
-    value: Option<&Value>,
-    label: &str,
-    where_: &str,
-) -> Result<[f64; N]> {
+fn numbers<const N: usize>(value: Option<&Value>, label: &str, where_: &str) -> Result<[f64; N]> {
     let Some(seq) = value.and_then(Value::as_sequence).filter(|s| s.len() == N) else {
         return Err(FrameError::Invalid(format!(
             "{where_}: {label} must be a list of {N} numbers, got {value:?}"
@@ -201,7 +197,10 @@ impl Extrinsics {
         let up = self.edges_above(up_children, src, dst, &mut dynamic)?;
         let mut down = self.edges_above(down_children, src, dst, &mut dynamic)?;
         if let Some(first) = dynamic.first() {
-            let parent = self.frames.frames()[first].parent.clone().unwrap_or_default();
+            let parent = self.frames.frames()[first]
+                .parent
+                .clone()
+                .unwrap_or_default();
             return Err(FrameError::DynamicEdge {
                 message: format!(
                     "'{src}' -> '{dst}' crosses the dynamic edge '{parent}' -> '{first}'; compose with a published pose instead of a static lookup"
