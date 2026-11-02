@@ -331,14 +331,29 @@ unsafe fn try_send_output(
         })?)
 }
 
-/// Type tag of a [`DoraParam`] value.
-#[repr(C)]
+/// Type tags of a [`DoraParam`] value (the values of the C `DoraParamKind` enum).
+///
+/// The field is a plain `u32` on the Rust side: a C caller may pass any
+/// value, and an out-of-range Rust enum read from C memory would be UB.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DoraParamKind {
     Bool = 0,
     Int = 1,
     Float = 2,
     String = 3,
+}
+
+impl TryFrom<u32> for DoraParamKind {
+    type Error = u32;
+    fn try_from(n: u32) -> Result<Self, u32> {
+        Ok(match n {
+            0 => Self::Bool,
+            1 => Self::Int,
+            2 => Self::Float,
+            3 => Self::String,
+            other => return Err(other),
+        })
+    }
 }
 
 /// A borrowed UTF-8 string (not null-terminated).
@@ -364,7 +379,8 @@ pub union DoraParamValue {
 pub struct DoraParam {
     pub key: *const c_char,
     pub key_len: usize,
-    pub kind: DoraParamKind,
+    /// A [`DoraParamKind`] value; validated at run time.
+    pub kind: u32,
     pub value: DoraParamValue,
 }
 
@@ -396,8 +412,13 @@ unsafe fn params_to_metadata(
         if key.is_empty() {
             eyre::bail!("param key is empty");
         }
-        let value = match p.kind {
-            DoraParamKind::Bool => Parameter::Bool(unsafe { p.value.b }),
+        let kind = DoraParamKind::try_from(p.kind)
+            .map_err(|n| eyre::eyre!("param '{key}': unknown kind {n}"))?;
+        let value = match kind {
+            // read the first byte, so a C `_Bool` holding a non-0/1 byte is not UB
+            DoraParamKind::Bool => {
+                Parameter::Bool(unsafe { *(&p.value as *const DoraParamValue).cast::<u8>() } != 0)
+            }
             DoraParamKind::Int => Parameter::Integer(unsafe { p.value.i }),
             DoraParamKind::Float => Parameter::Float(unsafe { p.value.f }),
             DoraParamKind::String => {
@@ -654,7 +675,7 @@ mod tests {
             DoraParam {
                 key: key.as_ptr().cast(),
                 key_len: key.len(),
-                kind: DoraParamKind::String,
+                kind: DoraParamKind::String as u32,
                 value: DoraParamValue {
                     s: DoraStr {
                         ptr: val.as_ptr().cast(),
@@ -665,22 +686,55 @@ mod tests {
             DoraParam {
                 key: seq.as_ptr().cast(),
                 key_len: seq.len(),
-                kind: DoraParamKind::Int,
+                kind: DoraParamKind::Int as u32,
                 value: DoraParamValue { i: 7 },
             },
         ];
         let out = unsafe { params_to_metadata(params.as_ptr(), params.len()) }.unwrap();
-        assert_eq!(out.get("frame_id"), Some(&Parameter::String("rslidar".into())));
+        assert_eq!(
+            out.get("frame_id"),
+            Some(&Parameter::String("rslidar".into()))
+        );
         assert_eq!(out.get("header_seq"), Some(&Parameter::Integer(7)));
-        assert!(unsafe { params_to_metadata(std::ptr::null(), 0) }.unwrap().is_empty());
+        assert!(
+            unsafe { params_to_metadata(std::ptr::null(), 0) }
+                .unwrap()
+                .is_empty()
+        );
         assert!(unsafe { params_to_metadata(std::ptr::null(), 1) }.is_err());
         let bad = [0xffu8, 0xfe];
         let p = [DoraParam {
             key: bad.as_ptr().cast(),
             key_len: 2,
-            kind: DoraParamKind::Bool,
+            kind: DoraParamKind::Bool as u32,
             value: DoraParamValue { b: true },
         }];
         assert!(unsafe { params_to_metadata(p.as_ptr(), 1) }.is_err());
+    }
+
+    #[test]
+    fn unknown_kind_is_refused_and_bool_round_trips() {
+        let key = b"k";
+        let mk = |kind: u32, value: DoraParamValue| DoraParam {
+            key: key.as_ptr().cast(),
+            key_len: 1,
+            kind,
+            value,
+        };
+        let p = [mk(7, DoraParamValue { i: 0 })];
+        let err = unsafe { params_to_metadata(p.as_ptr(), 1) }.unwrap_err();
+        assert!(
+            err.to_string().contains("param 'k': unknown kind 7"),
+            "{err}"
+        );
+        for b in [true, false] {
+            let p = [mk(0, DoraParamValue { b })];
+            let out = unsafe { params_to_metadata(p.as_ptr(), 1) }.unwrap();
+            assert_eq!(out.get("k"), Some(&Parameter::Bool(b)));
+        }
+        // a non-0/1 byte in a C _Bool must not be UB
+        let p = [mk(0, DoraParamValue { i: 2 })];
+        let out = unsafe { params_to_metadata(p.as_ptr(), 1) }.unwrap();
+        assert_eq!(out.get("k"), Some(&Parameter::Bool(true)));
     }
 }
