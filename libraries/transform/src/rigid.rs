@@ -2,6 +2,7 @@ use crate::extrinsics::Edge;
 use crate::frames::{FrameDict, Kind};
 use crate::{Extrinsics, FrameError, QUATERNION_NORM_TOLERANCE, Result};
 
+/// Row-major 4x4 homogeneous matrix; it acts on column vectors, p' = M * p.
 pub type Matrix = [[f64; 4]; 4];
 
 fn mul(a: &Matrix, b: &Matrix) -> Matrix {
@@ -41,12 +42,31 @@ pub fn rotation_matrix(q: [f64; 4]) -> [[f64; 3]; 3] {
 /// Maps coordinates expressed in `src` to coordinates expressed in `dst`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transform {
-    pub src: String,
-    pub dst: String,
-    pub matrix: Matrix,
+    src: String,
+    dst: String,
+    matrix: Matrix,
 }
 
 impl Transform {
+    pub fn src(&self) -> &str {
+        &self.src
+    }
+
+    pub fn dst(&self) -> &str {
+        &self.dst
+    }
+
+    pub fn matrix(&self) -> &Matrix {
+        &self.matrix
+    }
+
+    /// Wraps a matrix that is rigid by construction (a product or inverse of
+    /// rigid matrices), so it is not re-validated: validation tolerances
+    /// would otherwise reject long chains of accepted inputs.
+    fn from_trusted(src: String, dst: String, matrix: Matrix) -> Transform {
+        Transform { src, dst, matrix }
+    }
+
     pub fn new(src: impl Into<String>, dst: impl Into<String>, m: Matrix) -> Result<Self> {
         if m.iter().flatten().any(|v| !v.is_finite()) {
             return Err(FrameError::Invalid(
@@ -94,8 +114,17 @@ impl Transform {
         }
     }
 
+    /// Builds `src -> dst` from a translation and a quaternion in x, y, z, w
+    /// order. The quaternion is normalised here; callers check how far from
+    /// unit they accept. A zero or non-finite norm is refused.
     pub fn from_parts(src: &str, dst: &str, t: [f64; 3], q_xyzw: [f64; 4]) -> Result<Self> {
-        let r = rotation_matrix(q_xyzw);
+        let norm = q_xyzw.iter().map(|c| c * c).sum::<f64>().sqrt();
+        if !norm.is_finite() || norm == 0.0 {
+            return Err(FrameError::Invalid(format!(
+                "a rotation quaternion needs a finite, non-zero norm, got {q_xyzw:?}"
+            )));
+        }
+        let r = rotation_matrix(q_xyzw.map(|c| c / norm));
         let mut m = [[0.0; 4]; 4];
         for i in 0..3 {
             for j in 0..3 {
@@ -115,11 +144,11 @@ impl Transform {
                 other.src, other.dst, self.src, self.dst
             )));
         }
-        Transform::new(
+        Ok(Transform::from_trusted(
             self.src.clone(),
             other.dst.clone(),
             mul(&other.matrix, &self.matrix),
-        )
+        ))
     }
 
     pub fn inverse(&self) -> Transform {
@@ -132,11 +161,7 @@ impl Transform {
             out[i][3] = -(0..3).map(|k| m[k][i] * m[k][3]).sum::<f64>();
         }
         out[3][3] = 1.0;
-        Transform {
-            src: self.dst.clone(),
-            dst: self.src.clone(),
-            matrix: out,
-        }
+        Transform::from_trusted(self.dst.clone(), self.src.clone(), out)
     }
 
     pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
@@ -148,8 +173,9 @@ impl Transform {
         out
     }
 
-    /// Transform packed float32 points of `item_step` floats each; only the
-    /// first three (x, y, z) move, the rest pass through.
+    /// Transform packed float32 points of `item_step` values each (a count of
+    /// f32 values, not bytes). x, y, z must be the first three values of each
+    /// point; only they move, the rest pass through.
     pub fn apply_packed(&self, points: &[f32], item_step: usize) -> Result<Vec<f32>> {
         if item_step < 3 {
             return Err(FrameError::Invalid(format!(
@@ -203,6 +229,11 @@ pub fn pose_transform(
     child_frame: &str,
     frames: &FrameDict,
 ) -> Result<Transform> {
+    if parent_frame == child_frame {
+        return Err(FrameError::Invalid(format!(
+            "a pose relates two different frames, got '{parent_frame}' twice"
+        )));
+    }
     let parent = frames.require(parent_frame)?;
     if !matches!(parent.kind, Kind::Fixed | Kind::Dynamic) {
         return Err(FrameError::Invalid(format!(
@@ -258,11 +289,11 @@ pub fn resolve(
     dst: &str,
     pose: Option<&Transform>,
 ) -> Result<(Option<Transform>, bool)> {
-    match lookup(ex, src, dst) {
+    let first_edges = match lookup(ex, src, dst) {
         Ok(t) => return Ok((Some(t), false)),
-        Err(FrameError::DynamicEdge { .. }) => {}
+        Err(FrameError::DynamicEdge { edges, .. }) => edges,
         Err(e) => return Err(e),
-    }
+    };
     let Some(moving) = pose else {
         return Ok((None, false));
     };
@@ -276,6 +307,6 @@ pub fn resolve(
             "'{src}' -> '{dst}' cannot be composed with the pose of '{}' in '{}': the route needs a dynamic edge that pose does not give, and one pose covers one dynamic edge",
             moving.src, moving.dst
         ),
-        edges: vec![],
+        edges: first_edges,
     })
 }

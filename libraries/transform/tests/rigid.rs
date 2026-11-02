@@ -13,13 +13,13 @@ fn close(a: [f64; 3], b: [f64; 3]) -> bool {
 
 #[test]
 fn non_rigid_matrix_is_refused() {
-    let mut m = Transform::identity("a").matrix;
+    let mut m = *Transform::identity("a").matrix();
     m[0][0] = 2.0; // scale
     assert!(Transform::new("a", "b", m).is_err());
-    let mut r = Transform::identity("a").matrix;
+    let mut r = *Transform::identity("a").matrix();
     r[0][0] = -1.0; // reflection
     assert!(Transform::new("a", "b", r).is_err());
-    let mut last = Transform::identity("a").matrix;
+    let mut last = *Transform::identity("a").matrix();
     last[3][0] = 1.0;
     assert!(Transform::new("a", "b", last).is_err());
 }
@@ -71,7 +71,7 @@ fn pose_transform_checks_frames_and_values() {
     let f = FrameDict::parse(FRAMES).unwrap();
     let pose = [1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0];
     let t = pose_transform(&pose, "odom", "base_footprint", &f).unwrap();
-    assert_eq!((t.src.as_str(), t.dst.as_str()), ("base_footprint", "odom"));
+    assert_eq!((t.src(), t.dst()), ("base_footprint", "odom"));
     assert!(pose_transform(&pose, "base_link", "rslidar", &f).is_err()); // mounted parent
     assert!(pose_transform(&pose, "odom", "none", &f).is_err());
     assert!(
@@ -157,4 +157,124 @@ fn apply_packed_moves_xyz_and_keeps_intensity() {
     assert_eq!(out, vec![1.0, 0.0, 0.0, 7.0, 2.0, 1.0, 1.0, 9.0]);
     assert!(t.apply_packed(&pts[..7], 4).is_err());
     assert!(t.apply_packed(&pts, 2).is_err());
+}
+
+fn rz90(src: &str, dst: &str, t: [f64; 3]) -> Transform {
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    Transform::from_parts(src, dst, t, [0.0, 0.0, s, s]).unwrap()
+}
+
+#[test]
+fn lookup_pins_camera_geometry() {
+    let t = lookup(&ex(), "rslidar", "camera_front").unwrap();
+    assert!(close(t.apply([0.0; 3]), [0.0, 0.1, -0.15]));
+    let t = lookup(&ex(), "camera_front", "base_link").unwrap();
+    assert!(close(t.apply([0.0, 0.0, 1.0]), [1.4, 0.0, 0.35]));
+}
+
+#[test]
+fn then_order_is_self_first() {
+    let a = rz90("p", "q", [0.0; 3]);
+    let b = Transform::from_parts("q", "q", [1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    // rotate (1,0,0) to (0,1,0), then shift +x
+    assert!(close(
+        a.then(&b).unwrap().apply([1.0, 0.0, 0.0]),
+        [1.0, 1.0, 0.0]
+    ));
+    // shift first, then rotate: (2,0,0) -> (0,2,0)
+    let b2 = Transform::from_parts("p", "p", [1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    let a2 = rz90("p", "q", [0.0; 3]);
+    assert!(close(
+        b2.then(&a2).unwrap().apply([1.0, 0.0, 0.0]),
+        [0.0, 2.0, 0.0]
+    ));
+}
+
+#[test]
+fn resolve_with_rotated_pose() {
+    let f = FrameDict::parse(FRAMES).unwrap();
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    let pose = pose_transform(
+        &[1.0, 2.0, 0.0, 0.0, 0.0, s, s],
+        "odom",
+        "base_footprint",
+        &f,
+    )
+    .unwrap();
+    let (t, used) = resolve(&ex(), "rslidar", "odom", Some(&pose)).unwrap();
+    assert!(used);
+    assert!(close(t.unwrap().apply([0.0; 3]), [1.0, 2.25, 0.35]));
+    let (t, used) = resolve(&ex(), "odom", "base_link", Some(&pose)).unwrap();
+    assert!(used);
+    assert!(close(t.unwrap().apply([1.0, 3.0, 0.1]), [1.0, 0.0, 0.0]));
+}
+
+#[test]
+fn inverse_of_rotated_translated() {
+    let t = rz90("a", "b", [1.0, 2.0, 3.0]);
+    let inv = t.inverse();
+    let p = [0.3, -0.7, 2.0];
+    assert!(close(inv.apply(t.apply(p)), p));
+    let m = t.matrix();
+    let n = inv.matrix();
+    for i in 0..3 {
+        for j in 0..3 {
+            assert!((n[i][j] - m[j][i]).abs() < 1e-12);
+        }
+        let want = -(0..3).map(|k| m[k][i] * m[k][3]).sum::<f64>();
+        assert!((n[i][3] - want).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn resolve_propagates_other_errors() {
+    assert!(matches!(
+        resolve(&ex(), "nope", "odom", None),
+        Err(FrameError::UnknownFrame(_))
+    ));
+    // drop the rslidar edge from the calibration
+    let text = EXTRINSICS.replace(
+        "  - parent: base_link\n    child: rslidar\n    translation_m: [0.25, 0.0, 0.25]\n    rotation_xyzw: [0.0, 0.0, 0.0, 1.0]\n",
+        "",
+    );
+    assert_ne!(text, EXTRINSICS);
+    let frames = FrameDict::parse(FRAMES).unwrap();
+    {
+        let ex2 = Extrinsics::parse(&text, &frames, None).expect("parse");
+        let r = resolve(&ex2, "rslidar", "base_link", None);
+        assert!(matches!(r, Err(FrameError::MissingExtrinsic(_))), "{r:?}");
+    }
+}
+
+#[test]
+fn near_unit_quaternions_still_resolve() {
+    let k = 1.0 + 9.9e-7;
+    let text = EXTRINSICS.replace(
+        "[-0.5, 0.5, -0.5, 0.5]",
+        &format!(
+            "[{:?}, {:?}, {:?}, {:?}]",
+            -0.5 * k,
+            0.5 * k,
+            -0.5 * k,
+            0.5 * k
+        ),
+    );
+    assert_ne!(text, EXTRINSICS);
+    let f = FrameDict::parse(FRAMES).unwrap();
+    let ex = Extrinsics::parse(&text, &f, None).unwrap();
+    let q = [0.04502, -0.33413, -0.89433, -0.29411];
+    let n = q.iter().map(|c| c * c).sum::<f64>().sqrt();
+    let sc = k / n;
+    let v = [0.5, 0.5, 0.0, q[0] * sc, q[1] * sc, q[2] * sc, q[3] * sc];
+    let pose = pose_transform(&v, "odom", "base_footprint", &f).unwrap();
+    let (t, used) = resolve(&ex, "camera_front", "odom", Some(&pose)).unwrap();
+    assert!(used && t.is_some());
+}
+
+#[test]
+fn degenerate_inputs_are_refused() {
+    assert!(Transform::from_parts("a", "b", [0.0; 3], [0.0; 4]).is_err());
+    let f = FrameDict::parse(FRAMES).unwrap();
+    let id = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+    assert!(pose_transform(&id, "odom", "odom", &f).is_err());
 }
