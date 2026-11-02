@@ -2029,11 +2029,15 @@ nodes:
         assert_eq!(f.extrinsics.to_str(), Some("robots/r/extrinsics.yml"));
         let n = &d.nodes[0];
         assert_eq!(
-            n.input_frames.get(&"cloud".parse::<DataId>().unwrap()).map(String::as_str),
+            n.input_frames
+                .get(&"cloud".parse::<DataId>().unwrap())
+                .map(String::as_str),
             Some("any")
         );
         assert_eq!(
-            n.output_frames.get(&"cloud".parse::<DataId>().unwrap()).map(String::as_str),
+            n.output_frames
+                .get(&"cloud".parse::<DataId>().unwrap())
+                .map(String::as_str),
             Some("env:TARGET_FRAME")
         );
     }

@@ -278,3 +278,170 @@ fn degenerate_inputs_are_refused() {
     let id = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
     assert!(pose_transform(&id, "odom", "odom", &f).is_err());
 }
+
+// Parity with the reference suite (docs/contract-core/test-mapping.md).
+// Expected numbers are worked by hand, as in the reference.
+
+use dora_transform::rigid::rotation_matrix;
+
+const CAMERA_Q: [f64; 4] = [-0.5, 0.5, -0.5, 0.5];
+
+fn mat_close(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> bool {
+    a.iter()
+        .flatten()
+        .zip(b.iter().flatten())
+        .all(|(x, y)| (x - y).abs() < 1e-12)
+}
+
+#[test]
+fn camera_quaternion_gives_the_optical_axes_as_columns() {
+    let want = [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]];
+    assert!(mat_close(rotation_matrix(CAMERA_Q), want));
+}
+
+#[test]
+fn identity_quaternion_is_xyzw_not_wxyz() {
+    let eye = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    assert!(mat_close(rotation_matrix([0.0, 0.0, 0.0, 1.0]), eye));
+}
+
+#[test]
+fn yaw_plus_translation_moves_a_point_where_the_hand_says() {
+    let t = rz90("a", "b", [1.0, 2.0, 3.0]);
+    assert!(close(t.apply([1.0, 0.0, 0.0]), [1.0, 3.0, 3.0]));
+}
+
+#[test]
+fn a_transform_and_its_inverse_compose_to_identity_frames() {
+    let t = Transform::from_parts("a", "b", [1.0, 2.0, 3.0], CAMERA_Q).unwrap();
+    let back = t.then(&t.inverse()).unwrap();
+    assert_eq!((back.src(), back.dst()), ("a", "a"));
+    let id = Transform::identity("a");
+    for (x, y) in back
+        .matrix()
+        .iter()
+        .flatten()
+        .zip(id.matrix().iter().flatten())
+    {
+        assert!((x - y).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn then_refusal_says_the_frames_do_not_meet() {
+    let a = Transform::identity("a");
+    let c = Transform::from_parts("c", "d", [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    assert!(a.then(&c).unwrap_err().to_string().contains("do not meet"));
+}
+
+#[test]
+fn a_non_finite_matrix_is_refused() {
+    assert!(Transform::new("a", "b", [[f64::NAN; 4]; 4]).is_err());
+    let mut m = *Transform::identity("a").matrix();
+    m[0][0] = 2.0;
+    m[1][1] = 2.0;
+    m[2][2] = 2.0;
+    assert!(
+        Transform::new("a", "b", m)
+            .unwrap_err()
+            .to_string()
+            .contains("rotation")
+    );
+}
+
+#[test]
+fn camera_and_lidar_points_land_where_the_hand_says() {
+    let t = lookup(&ex(), "camera_front", "base_link").unwrap();
+    assert!(close(t.apply([0.0, 0.0, 1.0]), [1.40, 0.0, 0.35]));
+    assert!(close(t.apply([1.0, 0.0, 0.0]), [0.40, -1.0, 0.35]));
+    // (1,2,3) in rslidar -> (1.25, 2, 3.25) in base_link -> minus the camera
+    // origin -> optical axes x=-y, y=-z, z=x -> (-2, -2.9, 0.85).
+    let t = lookup(&ex(), "rslidar", "camera_front").unwrap();
+    assert!(close(t.apply([1.0, 2.0, 3.0]), [-2.0, -2.9, 0.85]));
+}
+
+#[test]
+fn lookup_in_reverse_is_the_inverse() {
+    let forward = lookup(&ex(), "rslidar", "camera_front").unwrap();
+    let backward = lookup(&ex(), "camera_front", "rslidar").unwrap();
+    let inv = backward.inverse();
+    for (x, y) in forward
+        .matrix()
+        .iter()
+        .flatten()
+        .zip(inv.matrix().iter().flatten())
+    {
+        assert!((x - y).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn a_pose_maps_its_child_into_its_frame() {
+    let f = FrameDict::parse(FRAMES).unwrap();
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    let t = pose_transform(
+        &[1.0, 2.0, 0.0, 0.0, 0.0, s, s],
+        "odom",
+        "base_footprint",
+        &f,
+    )
+    .unwrap();
+    assert_eq!((t.src(), t.dst()), ("base_footprint", "odom"));
+    assert!(close(t.apply([1.0, 0.0, 0.0]), [1.0, 3.0, 0.0]));
+}
+
+#[test]
+fn bad_pose_messages() {
+    let f = FrameDict::parse(FRAMES).unwrap();
+    let id = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+    for (values, parent, child, want) in [
+        (&id[..], "base_link", "rslidar", "fixed or dynamic"),
+        (&id[..], "odom", "none", "never part of a transform"),
+        (&id[..6], "odom", "base_link", "seven"),
+        (
+            &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5][..],
+            "odom",
+            "base_link",
+            "unit quaternion",
+        ),
+        (
+            &[0.0, 0.0, f64::INFINITY, 0.0, 0.0, 0.0, 1.0][..],
+            "odom",
+            "base_link",
+            "seven finite",
+        ),
+        (&id[..], "world", "base_link", "use 'map'"),
+    ] {
+        let err = pose_transform(values, parent, child, &f)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(want), "{parent}/{child}: {err}");
+    }
+}
+
+#[test]
+fn a_forward_pose_route_applies_a_non_trivial_lookup_after_the_pose() {
+    // A mounted `dock` under odom, 5 m along x and turned 180 degrees.
+    let frames = FrameDict::parse(&format!("{FRAMES}\n").replace(
+        "rejected_names:",
+        "  - {name: dock, parent: odom, kind: mounted}\nrejected_names:",
+    ))
+    .unwrap();
+    let text = format!(
+        "{EXTRINSICS}  - parent: odom\n    child: dock\n    translation_m: [5.0, 0.0, 0.0]\n    rotation_xyzw: [0.0, 0.0, 1.0, 0.0]\n"
+    );
+    let calib = Extrinsics::parse(&text, &frames, None).unwrap();
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    let pose = pose_transform(
+        &[1.0, 2.0, 0.0, 0.0, 0.0, s, s],
+        "odom",
+        "base_footprint",
+        &frames,
+    )
+    .unwrap();
+    let (t, used) = resolve(&calib, "rslidar", "dock", Some(&pose)).unwrap();
+    assert!(used);
+    // (0,0,0) in rslidar -> (0.25, 0, 0.35) in base_footprint -> (1, 2.25, 0.35)
+    // in odom -> R180^T ((1, 2.25, 0.35) - (5, 0, 0)) = (4, -2.25, 0.35) in dock.
+    assert!(close(t.unwrap().apply([0.0; 3]), [4.0, -2.25, 0.35]));
+}

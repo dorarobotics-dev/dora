@@ -249,6 +249,9 @@ pub fn derive(
     if parents.is_empty() {
         return err("derive() needs at least one parent; source nodes build a Header directly");
     }
+    if upgrade.as_ref().is_some_and(|up| up.reason.is_empty()) {
+        return err("an upgrade needs a non-empty reason");
+    }
     let mut degraded: Vec<&str> = parents
         .iter()
         .filter(|p| p.validity != Validity::Ok)
@@ -516,5 +519,228 @@ mod tests {
     #[test]
     fn derive_needs_a_parent() {
         assert!(derive(&[], "a", 0, Validity::Ok, None, None).is_err());
+    }
+
+    // Parity with the reference suite (docs/contract-core/test-mapping.md).
+
+    fn stale() -> Header {
+        Header::new("a", 0, 1, "s", Validity::Stale, Some("old".into())).unwrap()
+    }
+
+    #[test]
+    fn validity_vocabulary_is_closed() {
+        assert_eq!(
+            Validity::ALL.map(Validity::as_str),
+            [
+                "ok",
+                "missing",
+                "stale",
+                "unpaired",
+                "low_confidence",
+                "rejected"
+            ]
+        );
+        for bad in ["broken", "OK", "", "none"] {
+            assert!(Validity::parse(bad).is_err(), "{bad:?} accepted");
+        }
+    }
+
+    #[test]
+    fn every_degraded_validity_needs_a_reason() {
+        for v in Validity::ALL.into_iter().filter(|v| *v != Validity::Ok) {
+            assert!(Header::new("map", 0, 1, "s", v, None).is_err());
+            assert!(Header::new("map", 0, 1, "s", v, Some(String::new())).is_err());
+            let h = Header::new("map", 0, 1, "s", v, Some("why".into())).unwrap();
+            assert_eq!(h.reason.as_deref(), Some("why"));
+        }
+    }
+
+    #[test]
+    fn seq_zero_is_legal_and_negative_stamp_is_not() {
+        assert_eq!(ok("map", 1, "s").seq, 0);
+        assert!(Header::new("map", 0, -1, "s", Validity::Ok, None).is_err());
+    }
+
+    #[test]
+    fn read_refuses_bool_and_float_seq_and_stamp() {
+        for key in [SEQ, STAMP_NS] {
+            for bad in [Parameter::Bool(true), Parameter::Float(1.0)] {
+                let mut params = MetadataParameters::new();
+                ok("map", 1, "s").write(&mut params);
+                params.insert(key.into(), bad);
+                let err = Header::read(&params).unwrap_err().to_string();
+                assert!(err.contains(key), "{err}");
+            }
+        }
+    }
+
+    #[test]
+    fn read_applies_the_header_rules() {
+        let mut params = MetadataParameters::new();
+        ok("map", 1, "s").write(&mut params);
+        params.insert(STAMP_NS.into(), Parameter::Integer(0));
+        let err = Header::read(&params).unwrap_err().to_string();
+        assert!(err.contains("stamp_ns"), "{err}");
+    }
+
+    #[test]
+    fn read_names_each_missing_key() {
+        for key in [FRAME_ID, SEQ, STAMP_NS, SOURCE, VALIDITY] {
+            let mut params = MetadataParameters::new();
+            ok("map", 1, "s").write(&mut params);
+            params.remove(key);
+            let err = Header::read(&params).unwrap_err().to_string();
+            assert!(
+                err.contains(key) && err.contains("incomplete contract header"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn header_keys_are_the_contract_fields() {
+        assert_eq!(
+            [FRAME_ID, SEQ, STAMP_NS, SOURCE, VALIDITY, REASON],
+            [
+                "frame_id",
+                "header_seq",
+                "stamp_ns",
+                "source",
+                "validity",
+                "reason"
+            ]
+        );
+        // `seq` is dora's streaming chunk counter, never the header's.
+        assert_ne!(SEQ, crate::metadata::SEQ);
+    }
+
+    #[test]
+    fn written_header_is_flat_scalars() {
+        let mut params = MetadataParameters::new();
+        Header::new("map", 3, 7, "s", Validity::Stale, Some("old".into()))
+            .unwrap()
+            .write(&mut params);
+        assert_eq!(params.len(), 6);
+        assert!(
+            params
+                .values()
+                .all(|v| matches!(v, Parameter::String(_) | Parameter::Integer(_))),
+            "{params:?}"
+        );
+    }
+
+    #[test]
+    fn other_metadata_passes_through() {
+        let mut params = MetadataParameters::new();
+        params.insert("encoding".into(), Parameter::String("jointstate".into()));
+        params.insert("success".into(), Parameter::Bool(true));
+        let h = ok("map", 1, "s");
+        h.write(&mut params);
+        assert_eq!(
+            params.get("encoding"),
+            Some(&Parameter::String("jointstate".into()))
+        );
+        assert_eq!(params.get("success"), Some(&Parameter::Bool(true)));
+        assert_eq!(Header::read(&params).unwrap(), h);
+    }
+
+    #[test]
+    fn writing_the_header_replaces_shadowing_values() {
+        let mut params = MetadataParameters::new();
+        for key in [FRAME_ID, SEQ, STAMP_NS, SOURCE, VALIDITY, REASON] {
+            params.insert(key.into(), Parameter::String("hijacked".into()));
+        }
+        let h = ok("map", 1, "s");
+        h.write(&mut params);
+        assert_eq!(Header::read(&params).unwrap(), h);
+        assert!(!params.contains_key(REASON));
+    }
+
+    #[test]
+    fn derive_allows_any_degraded_output() {
+        for v in [Validity::Unpaired, Validity::LowConfidence] {
+            let out = derive(&[stale()], "a", 0, v, Some("why".into()), None).unwrap();
+            assert_eq!(out.validity, v);
+        }
+    }
+
+    #[test]
+    fn one_degraded_parent_among_several_needs_an_upgrade() {
+        let err = derive(
+            &[ok("a", 1, "s"), stale(), ok("a", 1, "t")],
+            "a",
+            0,
+            Validity::Ok,
+            None,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("invariant 2"), "{err}");
+    }
+
+    #[test]
+    fn the_error_names_the_offending_validity_values() {
+        let err = derive(&[stale()], "a", 0, Validity::Ok, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("stale"), "{err}");
+    }
+
+    #[test]
+    fn each_granted_upgrade_is_counted_once() {
+        let mut counted = 0;
+        let mut count = |_: &str| counted += 1;
+        for seq in 0..3 {
+            derive(
+                &[stale()],
+                "a",
+                seq,
+                Validity::Ok,
+                None,
+                Some(Upgrade {
+                    reason: "dropped_stale",
+                    count: &mut count,
+                }),
+            )
+            .unwrap();
+        }
+        assert_eq!(counted, 3);
+    }
+
+    #[test]
+    fn an_upgrade_needs_a_reason_and_is_not_counted_when_refused() {
+        let mut counted = 0;
+        let mut count = |_: &str| counted += 1;
+        let err = derive(
+            &[stale()],
+            "a",
+            0,
+            Validity::Ok,
+            None,
+            Some(Upgrade {
+                reason: "",
+                count: &mut count,
+            }),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("non-empty reason"), "{err}");
+        let mut count = |_: &str| counted += 1;
+        assert!(
+            derive(
+                &[ok("a", 1, "s")],
+                "a",
+                0,
+                Validity::Ok,
+                None,
+                Some(Upgrade {
+                    reason: "unnecessary",
+                    count: &mut count
+                })
+            )
+            .is_err()
+        );
+        assert_eq!(counted, 0);
     }
 }

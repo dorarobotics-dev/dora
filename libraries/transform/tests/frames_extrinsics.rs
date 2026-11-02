@@ -287,3 +287,269 @@ fn non_string_robot_or_source_is_refused() {
         );
     }
 }
+
+// Parity with the reference suite (docs/contract-core/test-mapping.md).
+
+fn message(r: Result<impl std::fmt::Debug, FrameError>) -> String {
+    r.unwrap_err().to_string()
+}
+
+#[test]
+fn malformed_dictionary_messages() {
+    for (doc, want) in [
+        (
+            "frames: [{name: a, parent: null, kind: floating}]",
+            "kind \"floating\"",
+        ),
+        (
+            "frames: [{name: a, parent: null, kind: mounted}]",
+            "needs a parent",
+        ),
+        (
+            "frames: [{name: a, parent: null, kind: dynamic}]",
+            "needs a parent",
+        ),
+        (
+            "frames: [{name: m, kind: fixed}, {name: a, parent: m, kind: fixed}]",
+            "cannot have a parent",
+        ),
+        (
+            "frames: [{name: a, parent: ghost, kind: mounted}]",
+            "unknown parent 'ghost'",
+        ),
+        (
+            "frames: [{name: a, kind: fixed}, {name: a, kind: fixed}]",
+            "more than once",
+        ),
+        ("frames: [{name: '', kind: fixed}]", "non-empty name"),
+        (
+            "frames: [{name: a, parent: b, kind: dynamic}, {name: b, parent: a, kind: dynamic}]",
+            "cycle",
+        ),
+        (
+            "frames: [{name: map, kind: fixed}]\nrejected_names: {map: map}",
+            "both a frame and a rejected name",
+        ),
+        (
+            "frames: [{name: map, kind: fixed}]\nrejected_names: {world: globe}",
+            "unknown frame 'globe'",
+        ),
+        ("contract_version: 1.1.0", "'frames' list"),
+        ("frames: [{name: a, parent: [x], kind: mounted}]", "parent"),
+        (
+            "frames: [{name: map, kind: fixed}]\nrejected_names: {world: [map]}",
+            "rejected",
+        ),
+    ] {
+        let e = FrameDict::parse(doc).unwrap_err();
+        assert!(matches!(e, FrameError::Invalid(_)), "{doc}: {e:?}");
+        assert!(e.to_string().contains(want), "{doc}: {e}");
+    }
+}
+
+#[test]
+fn chain_of_a_root_and_of_an_unknown_name() {
+    assert_eq!(frames().chain("map").unwrap(), vec!["map"]);
+    let e = frames().chain("velodyne").unwrap_err();
+    assert!(matches!(e, FrameError::UnknownFrame(_)));
+    assert!(e.to_string().contains("not in the frame dictionary"), "{e}");
+}
+
+#[test]
+fn known_frame_has_its_kind_and_parent() {
+    let f = frames();
+    let r = f.require("rslidar").unwrap();
+    assert_eq!(
+        (r.name.as_str(), r.parent.as_deref(), r.kind),
+        ("rslidar", Some("base_link"), Kind::Mounted)
+    );
+    assert_eq!(f.require("tool0").unwrap().kind, Kind::Dynamic);
+    assert_eq!(f.rejected()["livox_frame"], "rslidar");
+}
+
+fn calibration(entries: &str) -> String {
+    format!(
+        "contract_version: 1.0.0\nrobot: test-bot\ncalibrated: \"2026-10-20\"\nsource: unit-test fixture\ntransforms:\n{entries}"
+    )
+}
+
+fn entry(parent: &str, child: &str, t: &str, q: &str) -> String {
+    format!("  - {{parent: {parent}, child: {child}, translation_m: {t}, rotation_xyzw: {q}}}\n")
+}
+
+#[test]
+fn bad_extrinsic_messages() {
+    let (t0, q0) = ("[0.0, 0.0, 0.0]", "[0.0, 0.0, 0.0, 1.0]");
+    for (e, want) in [
+        (
+            entry("odom", "base_footprint", t0, q0),
+            "only mounted frames are calibrated",
+        ),
+        (
+            entry("map", "odom", t0, q0),
+            "only mounted frames are calibrated",
+        ),
+        (
+            entry("map", "rslidar", t0, q0),
+            "hangs from Some(\"base_link\")",
+        ),
+        (entry("base_link", "lidar_link", t0, q0), "use 'rslidar'"),
+        (
+            entry("base_link", "velodyne", t0, q0),
+            "not in the frame dictionary",
+        ),
+        (
+            entry("base_link", "rslidar", t0, "[0.0, 0.0, 0.0, 0.9]"),
+            "unit quaternion",
+        ),
+        (
+            entry("base_link", "rslidar", t0, "[0.0, 0.0, 0.0, 1.000002]"),
+            "unit quaternion",
+        ),
+        (
+            entry("base_link", "rslidar", "[0.0, .nan, 0.0]", q0),
+            "not a finite number",
+        ),
+        (
+            entry("base_link", "rslidar", "[0.0, 0.0]", q0),
+            "list of 3 numbers",
+        ),
+        (
+            entry("base_link", "rslidar", t0, "[0.0, 0.0, 1.0]"),
+            "list of 4 numbers",
+        ),
+        (
+            entry("base_link", "rslidar", "[true, 0.0, 0.0]", q0),
+            "not a finite number",
+        ),
+        (
+            "  - base_link -> rslidar\n".to_string(),
+            "parent and child must be frame names",
+        ),
+        (entry("[base_link]", "rslidar", t0, q0), "parent and child"),
+        (entry("base_link", "[rslidar]", t0, q0), "parent and child"),
+    ] {
+        let doc = calibration(&e);
+        let err = message(Extrinsics::parse(&doc, &frames(), None));
+        assert!(err.contains(want), "{e}: {err}");
+    }
+}
+
+#[test]
+fn a_quaternion_within_tolerance_is_kept_not_normalised() {
+    let doc = calibration(&entry(
+        "base_link",
+        "rslidar",
+        "[0.0, 0.0, 0.0]",
+        "[0.0, 0.0, 0.0, 1.0000005]",
+    ));
+    let e = Extrinsics::parse(&doc, &frames(), None).unwrap();
+    assert_eq!(
+        e.edges()["rslidar"].rotation_xyzw,
+        [0.0, 0.0, 0.0, 1.0000005]
+    );
+}
+
+#[test]
+fn every_top_level_key_is_required() {
+    let full = calibration(&entry("base_link", "rslidar", "[0, 0, 0]", "[0, 0, 0, 1]"));
+    for key in [
+        "contract_version",
+        "robot",
+        "calibrated",
+        "source",
+        "transforms",
+    ] {
+        let doc: String = full
+            .lines()
+            .filter(|l| !l.starts_with(&format!("{key}:")))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let doc = if key == "transforms" {
+            doc.lines()
+                .filter(|l| !l.starts_with("  -"))
+                .map(|l| format!("{l}\n"))
+                .collect()
+        } else {
+            doc
+        };
+        let err = message(Extrinsics::parse(&doc, &frames(), None));
+        assert!(
+            err.contains(&format!("missing the required key '{key}'")),
+            "{key}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_route_descends_two_edges_from_the_ancestor() {
+    let r = extrinsics()
+        .route("base_footprint", "camera_front")
+        .unwrap();
+    assert!(r.up.is_empty());
+    assert_eq!(edge_names(&r.down), vec!["base_link", "camera_front"]);
+}
+
+#[test]
+fn a_missing_extrinsic_anywhere_on_the_route_outranks_a_dynamic_edge() {
+    // tool0 is dynamic (a pose can stand in for it); camera_front is not calibrated.
+    let doc = calibration(&entry(
+        "base_footprint",
+        "base_link",
+        "[0.0, 0.0, 0.1]",
+        "[0, 0, 0, 1]",
+    ));
+    let e = Extrinsics::parse(&doc, &frames(), None).unwrap();
+    for (src, dst) in [("tool0", "camera_front"), ("camera_front", "tool0")] {
+        let err = e.route(src, dst).unwrap_err();
+        assert!(
+            matches!(err, FrameError::MissingExtrinsic(_)),
+            "{src}->{dst}: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("'base_link' -> 'camera_front'"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn a_missing_extrinsic_on_a_static_route_is_never_identity() {
+    let doc = calibration(&entry(
+        "base_link",
+        "rslidar",
+        "[0.25, 0.0, 0.25]",
+        "[0, 0, 0, 1]",
+    ));
+    let e = Extrinsics::parse(&doc, &frames(), None).unwrap();
+    let err = e.route("imu_link", "base_link").unwrap_err();
+    assert!(matches!(err, FrameError::MissingExtrinsic(_)));
+    assert!(
+        err.to_string().contains("never assumed to be identity"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_dynamic_edge_error_names_every_edge_it_crosses() {
+    let err = extrinsics().route("rslidar", "map").unwrap_err();
+    assert!(
+        err.to_string().contains("'odom' -> 'base_footprint'"),
+        "{err}"
+    );
+    match err {
+        FrameError::DynamicEdge { edges, .. } => assert_eq!(
+            edges,
+            vec![
+                ("base_footprint".to_string(), "odom".to_string()),
+                ("odom".to_string(), "map".to_string()),
+            ]
+        ),
+        other => panic!("{other:?}"),
+    }
+    let none = extrinsics().route("none", "base_link").unwrap_err();
+    assert!(
+        none.to_string().contains("never part of a transform"),
+        "{none}"
+    );
+}

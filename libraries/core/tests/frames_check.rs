@@ -1,5 +1,5 @@
 use dora_core::descriptor::Descriptor;
-use dora_core::descriptor::frames_check::check_frames;
+use dora_core::descriptor::frames_check::{FrameViolation, check_frames};
 use std::path::Path;
 
 fn run(yaml: &str) -> Vec<String> {
@@ -415,4 +415,156 @@ fn env_frames_are_not_trimmed() {
             .any(|m| m.starts_with("unknown_frame:ft:cloud") && m.contains("' odom'")),
         "{v:?}"
     );
+}
+
+// Parity with the reference suite (docs/contract-core/test-mapping.md).
+
+#[test]
+fn a_calibrated_static_frame_change_passes() {
+    let v = run(&format!(
+        "{HEAD}{SIM}{}",
+        transform_node("camera_front", false, "extrinsics.yml")
+    ));
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn an_env_frame_with_its_variable_unset_is_reported() {
+    let unset = transform_node("x", true, "extrinsics.yml").replace("TARGET_FRAME: x, ", "");
+    let v = run(&format!("{HEAD}{SIM}{unset}"));
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(
+        v[0].starts_with("frame:ft:cloud") && v[0].contains("sets no TARGET_FRAME"),
+        "{v:?}"
+    );
+    // A value-less entry is unset, never the string "None"/"null".
+    let empty = transform_node("\"\"", true, "extrinsics.yml");
+    let v = run(&format!("{HEAD}{SIM}{empty}"));
+    assert!(
+        v.iter().any(|m| m.contains("sets no TARGET_FRAME")),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn a_rejected_env_target_names_its_replacement() {
+    let v = run(&format!(
+        "{HEAD}{SIM}{}",
+        transform_node("lidar_link", true, "extrinsics.yml")
+    ));
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(
+        v[0].starts_with("unknown_frame:ft:cloud") && v[0].contains("use 'rslidar'"),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn a_literal_output_that_changes_frame_is_checked() {
+    let literal = |frame: &str| {
+        transform_node("x", false, "x")
+            .replace(", DORA_EXTRINSICS: x", "")
+            .replace("{cloud: env:TARGET_FRAME}", &format!("{{cloud: {frame}}}"))
+    };
+    // rslidar in, base_link out: a frame change with no calibration named.
+    let v = run(&format!("{HEAD}{SIM}{}", literal("base_link")));
+    assert!(
+        v.iter()
+            .any(|m| m.starts_with("transform:ft:DORA_EXTRINSICS")
+                && m.contains("sets no DORA_EXTRINSICS")),
+        "{v:?}"
+    );
+    // rslidar in, rslidar out: no frame change, nothing to calibrate.
+    assert!(run(&format!("{HEAD}{SIM}{}", literal("rslidar"))).is_empty());
+}
+
+#[test]
+fn same_as_follows_a_three_hop_chain_and_a_literal_stops_it() {
+    let relay = |id: &str, from: &str| {
+        format!(
+            "\n  - id: {id}\n    path: r.py\n    inputs: {{cloud: {from}/cloud}}\n    outputs: [cloud]\n    output_frames: {{cloud: same_as:cloud}}\n"
+        )
+    };
+    let sink = |from: &str, frame: &str| {
+        format!(
+            "\n  - id: sink\n    path: s.py\n    inputs: {{cloud: {from}/cloud}}\n    input_frames: {{cloud: {frame}}}\n"
+        )
+    };
+    let chain = format!(
+        "{}{}{}",
+        relay("r1", "sim"),
+        relay("r2", "r1"),
+        relay("r3", "r2")
+    );
+    assert!(run(&format!("{HEAD}{SIM}{chain}{}", sink("r3", "rslidar"))).is_empty());
+    let v = run(&format!("{HEAD}{SIM}{chain}{}", sink("r3", "base_link")));
+    assert!(
+        v.iter()
+            .any(|m| m.starts_with("frame:sink:cloud") && m.contains("'rslidar'")),
+        "{v:?}"
+    );
+
+    // A literal output ends the chain: what comes after is in its frame.
+    let lit = "\n  - id: tf\n    path: t.py\n    inputs: {cloud: r3/cloud}\n    outputs: [cloud]\n    output_frames: {cloud: base_link}\n    env: {DORA_EXTRINSICS: extrinsics.yml}\n";
+    let after = relay("r4", "tf");
+    assert!(
+        run(&format!(
+            "{HEAD}{SIM}{chain}{lit}{after}{}",
+            sink("r4", "base_link")
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_same_as_self_loop_terminates() {
+    let looped = "\n  - id: a\n    path: a.py\n    inputs: {x: a/y}\n    outputs: [y]\n    output_frames: {y: same_as:x}\n  - id: sink\n    path: s.py\n    inputs: {y: a/y}\n    input_frames: {y: rslidar}\n";
+    let v = run(&format!("{HEAD}{looped}"));
+    assert!(
+        v.iter()
+            .any(|m| m.contains("frame resolution cycle: a.y -> a.y")),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn an_unreadable_frame_dictionary_is_reported_by_name() {
+    for dictionary in ["absent.yml", "extrinsics-no-base.yml"] {
+        let yaml = format!("{HEAD}{SIM}").replace(
+            "dictionary: frames.yml",
+            &format!("dictionary: {dictionary}"),
+        );
+        let v = run(&yaml);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].starts_with("transform:-:frames.dictionary") && v[0].contains(dictionary),
+            "{v:?}"
+        );
+    }
+}
+
+#[test]
+fn a_violation_renders_check_node_and_port() {
+    let v = FrameViolation {
+        check: "frame",
+        node: "sink".into(),
+        port: "cloud".into(),
+        message: "boom".into(),
+    };
+    assert_eq!(v.to_string(), "[frame] sink/cloud: boom");
+}
+
+#[test]
+fn a_value_less_env_entry_is_refused_not_read_as_none() {
+    // dora refuses a null env value when it parses the dataflow, so a
+    // value-less TARGET_FRAME can never reach a node as "None" or "null".
+    let yaml = format!(
+        "{HEAD}{SIM}{}",
+        transform_node("odom", true, "extrinsics.yml")
+    )
+    .replace("TARGET_FRAME: odom,", "TARGET_FRAME: ,");
+    let err = serde_yaml::from_str::<Descriptor>(&yaml)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("env"), "{err}");
 }

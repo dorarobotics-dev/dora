@@ -456,6 +456,34 @@ nodes:
     }
 
     #[test]
+    fn unwired_optional_input_does_not_warn() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest(
+            &tmp.path().join("yolo"),
+            &MANIFEST.replace(
+                "outputs:",
+                "  depth:\n    required: false\n    type: std/media/v1/Image\noutputs:",
+            ),
+        );
+        let mut df = dataflow(
+            r#"
+nodes:
+  - id: camera
+    path: cam
+    outputs: [image]
+  - id: detector
+    path: yolo/target/release/dora-yolo
+    inputs:
+      image: camera/image
+    outputs: [bbox]
+"#,
+        );
+        let mut registry = TypeRegistry::new();
+        let result = inject_adjacent_manifests(&mut df, tmp.path(), &mut registry);
+        assert_eq!(result.warnings, Vec::<String>::new());
+    }
+
+    #[test]
     fn timer_and_log_inputs_do_not_warn_as_undeclared() {
         // A node commonly subscribes to a built-in timer/log stream alongside
         // its manifest data ports. Those subscriptions are dataflow wiring, not
