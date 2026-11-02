@@ -172,6 +172,14 @@ const ALL_CHECKABLE_FIELDS: &[CheckableField] = &[
         is_set: |node| !node.input_types.is_empty(),
     },
     CheckableField {
+        name: "output_frames",
+        is_set: |node| !node.output_frames.is_empty(),
+    },
+    CheckableField {
+        name: "input_frames",
+        is_set: |node| !node.input_frames.is_empty(),
+    },
+    CheckableField {
         name: "output_metadata",
         is_set: |node| !node.output_metadata.is_empty(),
     },
@@ -310,6 +318,8 @@ const STANDARD_ALLOWED: &[&str] = &[
     "outputs",
     "output_types",
     "input_types",
+    "output_frames",
+    "input_frames",
     "output_framing",
     "shared_memory_pool_size",
     "restart_policy",
@@ -370,6 +380,8 @@ const ROS2_ALLOWED: &[&str] = &[
     "outputs",
     "output_types",
     "input_types",
+    "output_frames",
+    "input_frames",
     "output_framing",
     "shared_memory_pool_size",
     "restart_policy",
@@ -509,6 +521,14 @@ hub: dora-yolo@^0.5
                 "id: x\npath: ./node\ninput_types:\n  in: string\n",
             ),
             (
+                "output_frames",
+                "id: x\npath: ./node\noutput_frames:\n  out: any\n",
+            ),
+            (
+                "input_frames",
+                "id: x\npath: ./node\ninput_frames:\n  in: any\n",
+            ),
+            (
                 "output_metadata",
                 "id: x\npath: ./node\noutput_metadata:\n  out: [request_id]\n",
             ),
@@ -579,6 +599,16 @@ hub: dora-yolo@^0.5
                 "field `{field_name}` should be detected as set"
             );
         }
+    }
+
+    #[test]
+    fn frame_annotations_are_not_unknown_keys() {
+        let node = parse_node(
+            "id: x\npath: ./node\ninputs:\n  in: s/out\noutputs: [out]\n\
+             input_frames:\n  in: any\noutput_frames:\n  out: same_as:in\n",
+        );
+        check_standard(&node).expect("frame annotations are allowed on standard nodes");
+        classify(&node).expect("node with frame annotations classifies");
     }
 
     #[test]

@@ -169,6 +169,16 @@ pub struct Descriptor {
     #[schemars(with = "Option<Vec<TypeRuleDef>>")]
     pub type_rules: Vec<TypeRuleDef>,
 
+    /// Frame dictionary and robot calibration for frame checks.
+    ///
+    /// ```yaml
+    /// frames:
+    ///   dictionary: robots/my-robot/frames.yml
+    ///   extrinsics: robots/my-robot/extrinsics.yml
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames: Option<FramesConfig>,
+
     /// Global environment variables inherited by every node.
     ///
     /// Each node's own `env` map takes precedence on key conflicts, so nodes
@@ -208,6 +218,7 @@ impl Descriptor {
             strict_types: None,
             exit_when_nodes_finish: None,
             type_rules: Default::default(),
+            frames: None,
             env: None,
         }
     }
@@ -236,6 +247,14 @@ impl TypeRuleDef {
     pub fn new(from: String, to: String) -> Self {
         Self { from, to }
     }
+}
+
+/// Paths relative to the dataflow file.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FramesConfig {
+    pub dictionary: PathBuf,
+    pub extrinsics: PathBuf,
 }
 
 /// Specifies when a node should be restarted.
@@ -620,6 +639,18 @@ pub struct Node {
     // An empty key is YAML `null`, which deserializes to the default.
     #[schemars(with = "Option<BTreeMap<DataId, String>>")]
     pub input_types: BTreeMap<DataId, String>,
+
+    /// Frame each output is expressed in: a frame name, `any`,
+    /// `same_as:<input id>` or `env:<VAR>` (resolved from this node's `env`).
+    /// Checked by `dora validate` when the dataflow has a `frames:` key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(with = "Option<BTreeMap<DataId, String>>")]
+    pub output_frames: BTreeMap<DataId, String>,
+
+    /// Frame each input requires: a frame name or `any`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(with = "Option<BTreeMap<DataId, String>>")]
+    pub input_frames: BTreeMap<DataId, String>,
 
     /// Required metadata keys per output.
     ///
@@ -1069,6 +1100,8 @@ impl Node {
             output_framing: Default::default(),
             inputs: Default::default(),
             input_types: Default::default(),
+            output_frames: Default::default(),
+            input_frames: Default::default(),
             shared_memory_pool_size: None,
             output_metadata: Default::default(),
             pattern: None,
@@ -1973,6 +2006,45 @@ pub struct Ros2QosConfig {
 mod tests {
     use super::*;
 
+    #[test]
+    fn frame_annotations_and_frames_key_parse() {
+        let yaml = r#"
+frames:
+  dictionary: robots/r/frames.yml
+  extrinsics: robots/r/extrinsics.yml
+nodes:
+  - id: t
+    path: t.py
+    inputs:
+      cloud: s/cloud
+    outputs: [cloud]
+    input_frames:
+      cloud: any
+    output_frames:
+      cloud: env:TARGET_FRAME
+"#;
+        let d: Descriptor = serde_yaml::from_str(yaml).unwrap();
+        let f = d.frames.as_ref().unwrap();
+        assert_eq!(f.dictionary.to_str(), Some("robots/r/frames.yml"));
+        assert_eq!(f.extrinsics.to_str(), Some("robots/r/extrinsics.yml"));
+        let n = &d.nodes[0];
+        assert_eq!(
+            n.input_frames.get(&"cloud".parse::<DataId>().unwrap()).map(String::as_str),
+            Some("any")
+        );
+        assert_eq!(
+            n.output_frames.get(&"cloud".parse::<DataId>().unwrap()).map(String::as_str),
+            Some("env:TARGET_FRAME")
+        );
+    }
+
+    #[test]
+    fn unknown_key_inside_frames_is_rejected() {
+        let yaml = "frames:\n  dictionary: a.yml\n  extrinsics: b.yml\n  bogus: c.yml\nnodes: []\n";
+        let err = serde_yaml::from_str::<Descriptor>(yaml).unwrap_err();
+        assert!(err.to_string().contains("bogus"), "{err}");
+    }
+
     /// A quoted `env:` value must reach the node verbatim. The derived
     /// untagged enum parsed strings into the first matching variant, so
     /// `"1.10"` became `1.1` and `"007"` became `7`.
@@ -2465,6 +2537,7 @@ debug:
         // `dora/timer/millis/100`, `dora/logs/...`).
         // `TypeRuleDef`: both fields are required strings, and an empty one
         // reads as "" (like `namespace`), so the schema rejects it on purpose.
+        // `FramesConfig`: same, both fields are required paths.
         // Operators are checked below.
         let not_walked = [
             "InputMapping",
@@ -2472,6 +2545,7 @@ debug:
             "LogSubscriptionFilter",
             "Duration",
             "TypeRuleDef",
+            "FramesConfig",
             "OperatorDefinition",
             "SingleOperatorDefinition",
         ];
