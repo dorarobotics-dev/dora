@@ -2534,6 +2534,7 @@ dependencies = [
  "dora-ros2-bridge-python",
  "dora-runtime-python",
  "dora-tensor-pool-python",
+ "dora-transform",
  "eyre",
  "flume 0.12.0",
  "futures",

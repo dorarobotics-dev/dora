@@ -47,6 +47,7 @@ futures = { workspace = true }
 futures-timer = "3.0.4"
 dora-ros2-bridge-python = { workspace = true }
 dora-download = { workspace = true }
+dora-transform = { workspace = true }
 dora-tensor-pool-python = { workspace = true, optional = true }
 shared_memory_extended = "0.13.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "time", "macros"] }

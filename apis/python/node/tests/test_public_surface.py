@@ -64,6 +64,8 @@ EXEMPT_MODULE_NAMES = frozenset(
         # and fail under `pytest tests/`.
         "builder",
         "testing",
+        # Native submodule over dora-transform; registered in sys.modules.
+        "transform",
         # The native extension module. Every Python package exposes its
         # submodules as attributes; this is the language, not an API decision.
         "dora",
