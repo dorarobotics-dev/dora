@@ -1468,6 +1468,81 @@ nodes:
         );
     }
 
+    /// `dora validate` runs the frame checks on the expanded descriptor, so
+    /// expansion must keep the `frames:` key and the per-node frame
+    /// annotations of both top-level and module-inner nodes.
+    #[test]
+    fn expand_preserves_frames_and_frame_annotations() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        write_file(
+            base,
+            "relay_module.yml",
+            r#"
+module:
+  name: relay
+  inputs: [data_in]
+  outputs: [data_out]
+
+nodes:
+  - id: passthrough
+    path: relay.py
+    inputs:
+      incoming: _mod/data_in
+    input_frames:
+      incoming: rslidar
+    outputs:
+      - data_out
+    output_frames:
+      data_out: same_as:incoming
+"#,
+        );
+        let descriptor = parse_descriptor(
+            r#"
+frames:
+  dictionary: frames.yml
+  extrinsics: extrinsics.yml
+
+nodes:
+  - id: source
+    path: source.py
+    outputs:
+      - cloud
+    output_frames:
+      cloud: rslidar
+
+  - id: my_relay
+    module: relay_module.yml
+    inputs:
+      data_in: source/cloud
+"#,
+        );
+        let expanded = expand_modules(&descriptor, base).unwrap();
+        assert_eq!(expanded.frames, descriptor.frames);
+        let source = expanded
+            .nodes
+            .iter()
+            .find(|n| n.id.as_ref() == "source")
+            .unwrap();
+        assert_eq!(
+            source.output_frames.get("cloud").map(String::as_str),
+            Some("rslidar")
+        );
+        let inner = expanded
+            .nodes
+            .iter()
+            .find(|n| n.id.as_ref() == "my_relay.passthrough")
+            .unwrap();
+        assert_eq!(
+            inner.input_frames.get("incoming").map(String::as_str),
+            Some("rslidar")
+        );
+        assert_eq!(
+            inner.output_frames.get("data_out").map(String::as_str),
+            Some("same_as:incoming")
+        );
+    }
+
     /// Absent means absent: it must not become `Some(false)`, which
     /// would be indistinguishable from an explicit opt out and would
     /// start round-tripping into serialized output.

@@ -2249,6 +2249,7 @@ version = "1.1.0"
 dependencies = [
  "arrow-schema 59.3.0",
  "dora-message",
+ "dora-transform",
  "dunce",
  "eyre",
  "fs_extra",

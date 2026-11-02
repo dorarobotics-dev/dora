@@ -2,6 +2,7 @@ use super::Executable;
 use dora_core::{
     descriptor::{
         Descriptor, DescriptorExt,
+        frames_check::check_frames,
         validate::{check_dataflow_static, check_type_annotations_full, check_wiring},
     },
     manifest::{NodeManifest, inject::inject_adjacent_manifests},
@@ -180,6 +181,20 @@ fn validate_dataflow(dataflow: &Path, strict_types: bool, offline: bool) -> eyre
         println!("{count} type warning(s) found.");
         if strict {
             bail!("{count} type warning(s) found (--strict mode)");
+        }
+    }
+
+    // Frame, route and calibration checks; only with a `frames:` key.
+    if descriptor.frames.is_some() {
+        let frame_violations = check_frames(&descriptor, working_dir);
+        if frame_violations.is_empty() {
+            println!("Frames OK.");
+        } else {
+            println!("Frame errors:");
+            for v in &frame_violations {
+                println!("  - {v}");
+            }
+            bail!("{} frame error(s) found", frame_violations.len());
         }
     }
 

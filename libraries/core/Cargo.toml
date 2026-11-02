@@ -20,6 +20,7 @@ zenoh = ["dep:zenoh", "dep:json5"]
 
 [dependencies]
 dora-message = { workspace = true }
+dora-transform = { workspace = true }
 eyre = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }

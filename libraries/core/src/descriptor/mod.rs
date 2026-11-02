@@ -44,6 +44,7 @@ pub(crate) fn normalize_path(path: &Path) -> PathBuf {
 }
 
 mod expand;
+pub mod frames_check;
 pub mod validate;
 mod visualize;
 
