@@ -609,6 +609,7 @@ mod tests {
             SEQ,
             FIN,
             FLUSH,
+            crate::header::SEQ,
         ];
         for (i, a) in keys.iter().enumerate() {
             for b in &keys[i + 1..] {

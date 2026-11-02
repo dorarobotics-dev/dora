@@ -4,20 +4,39 @@
 //! metadata parameters under the keys below. A degraded message is forwarded,
 //! never silently dropped, and never upgraded except by an operator that
 //! counts the upgrade (see [`derive`]).
+//!
+//! Header keys are unprefixed names, except `header_seq`, which avoids dora's
+//! streaming `seq`. User code must not reuse these keys for other meanings.
 
 use crate::metadata::{MetadataParameters, Parameter};
 use std::fmt;
 
+/// Coordinate frame the payload is expressed in.
 pub const FRAME_ID: &str = "frame_id";
-pub const SEQ: &str = "seq";
+/// Per-output counter >= 0, so a gap means loss on the edge.
+pub const SEQ: &str = "header_seq";
+/// Capture time in integer nanoseconds on the producer's clock.
 pub const STAMP_NS: &str = "stamp_ns";
+/// Name of the producing node, or the sorted `+`-joined parent sources.
 pub const SOURCE: &str = "source";
+/// One of the [`Validity`] values, in snake case.
 pub const VALIDITY: &str = "validity";
+/// Why the message is degraded; absent when validity is `ok`.
 pub const REASON: &str = "reason";
+/// The frame whose pose a Pose/Transform message gives.
 pub const CHILD_FRAME: &str = "child_frame";
 
+/// Error for a malformed or inconsistent header.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeaderError(pub String);
+#[non_exhaustive]
+pub struct HeaderError(String);
+
+impl HeaderError {
+    /// The human-readable description.
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
 
 impl fmt::Display for HeaderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -31,13 +50,22 @@ fn err<T>(msg: impl Into<String>) -> Result<T, HeaderError> {
     Err(HeaderError(msg.into()))
 }
 
+/// Whether a message can be trusted as-is.
+///
+/// Deliberately exhaustive: the contract's set of validity values is closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Validity {
+    /// Fully valid.
     Ok,
+    /// The data could not be produced.
     Missing,
+    /// The data is older than allowed.
     Stale,
+    /// Inputs that should pair up did not.
     Unpaired,
+    /// Produced, but with low confidence.
     LowConfidence,
+    /// Refused by a check; do not use.
     Rejected,
 }
 
@@ -64,19 +92,32 @@ impl Validity {
 
     pub fn parse(s: &str) -> Result<Self, HeaderError> {
         Self::ALL.into_iter().find(|v| v.as_str() == s).map_or_else(
-            || err(format!("unknown validity {s:?}; expected one of ok, missing, stale, unpaired, low_confidence, rejected")),
+            || {
+                let expected = Self::ALL.map(Validity::as_str).join(", ");
+                err(format!(
+                    "unknown validity {s:?}; expected one of {expected}"
+                ))
+            },
             Ok,
         )
     }
 }
 
+/// The contract header. Build it with [`Header::new`], [`Header::read`] or [`derive`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Header {
+    /// Coordinate frame of the payload; non-empty.
     pub frame_id: String,
+    /// Per-output counter, >= 0.
     pub seq: i64,
+    /// Capture time in nanoseconds, >= 1.
     pub stamp_ns: i64,
+    /// Producing node or joined parent sources; non-empty.
     pub source: String,
+    /// Whether the payload can be trusted.
     pub validity: Validity,
+    /// Required and non-empty when degraded, absent when `ok`.
     pub reason: Option<String>,
 }
 
@@ -155,24 +196,20 @@ impl Header {
             Some(other) => err(format!(
                 "metadata key {key:?} must be a string, got {other:?}"
             )),
-            None => err(format!(
-                "metadata carries no contract header; missing {key:?}"
-            )),
+            None => err(format!("incomplete contract header; missing {key:?}")),
         };
         let integer = |key: &str| match params.get(key) {
             Some(Parameter::Integer(i)) => Ok(*i),
             Some(other) => err(format!(
                 "metadata key {key:?} must be an integer, got {other:?}"
             )),
-            None => err(format!(
-                "metadata carries no contract header; missing {key:?}"
-            )),
+            None => err(format!("incomplete contract header; missing {key:?}")),
         };
         let reason = match params.get(REASON) {
             Some(Parameter::String(s)) => Some(s.clone()),
             Some(other) => {
                 return err(format!(
-                    "metadata key \"reason\" must be a string, got {other:?}"
+                    "metadata key {REASON:?} must be a string, got {other:?}"
                 ));
             }
             None => None,
@@ -190,7 +227,9 @@ impl Header {
 
 /// A counted upgrade: the only way an output may be `ok` while a parent is not.
 pub struct Upgrade<'a> {
+    /// Why the upgrade is justified; passed to `count`.
     pub reason: &'a str,
+    /// Called once with `reason` when the upgrade is applied.
     pub count: &'a mut dyn FnMut(&str),
 }
 
@@ -237,7 +276,11 @@ pub fn derive(
     let header = Header::new(
         frame_id,
         seq,
-        parents.iter().map(|p| p.stamp_ns).min().unwrap(),
+        parents
+            .iter()
+            .map(|p| p.stamp_ns)
+            .min()
+            .expect("parents is non-empty"),
         sources.join("+"),
         validity,
         reason,
@@ -332,7 +375,17 @@ mod tests {
     #[test]
     fn derive_refuses_ok_from_degraded_without_upgrade() {
         let stale = Header::new("a", 0, 1, "s", Validity::Stale, Some("old".into())).unwrap();
-        assert!(derive(std::slice::from_ref(&stale), "a", 0, Validity::Ok, None, None).is_err());
+        assert!(
+            derive(
+                std::slice::from_ref(&stale),
+                "a",
+                0,
+                Validity::Ok,
+                None,
+                None
+            )
+            .is_err()
+        );
         let out = derive(&[stale], "a", 0, Validity::Stale, Some("old".into()), None).unwrap();
         assert_eq!(out.validity, Validity::Stale);
     }
@@ -374,6 +427,90 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn degraded_header_round_trips() {
+        let h = Header::new(
+            "map",
+            3,
+            7,
+            "s",
+            Validity::LowConfidence,
+            Some("blur".into()),
+        )
+        .unwrap();
+        let mut params = MetadataParameters::new();
+        h.write(&mut params);
+        assert_eq!(Header::read(&params).unwrap(), h);
+    }
+
+    #[test]
+    fn writing_ok_over_degraded_clears_reason() {
+        let mut params = MetadataParameters::new();
+        Header::new("map", 0, 1, "s", Validity::Stale, Some("old".into()))
+            .unwrap()
+            .write(&mut params);
+        ok("map", 2, "s").write(&mut params);
+        let back = Header::read(&params).unwrap();
+        assert_eq!(back.validity, Validity::Ok);
+        assert_eq!(back.reason, None);
+    }
+
+    #[test]
+    fn derive_refuses_upgrade_when_output_is_degraded() {
+        let stale = Header::new("a", 0, 1, "s", Validity::Stale, Some("old".into())).unwrap();
+        let mut count = |_: &str| {};
+        assert!(
+            derive(
+                &[stale],
+                "a",
+                0,
+                Validity::Stale,
+                Some("old".into()),
+                Some(Upgrade {
+                    reason: "x",
+                    count: &mut count
+                })
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn derive_does_not_count_when_it_fails() {
+        let stale = Header::new("a", 0, 1, "s", Validity::Stale, Some("old".into())).unwrap();
+        let mut counted = 0;
+        let mut count = |_: &str| counted += 1;
+        assert!(
+            derive(
+                &[stale],
+                "",
+                0,
+                Validity::Ok,
+                None,
+                Some(Upgrade {
+                    reason: "x",
+                    count: &mut count
+                })
+            )
+            .is_err()
+        );
+        assert_eq!(counted, 0);
+    }
+
+    #[test]
+    fn derive_dedups_duplicate_sources() {
+        let out = derive(
+            &[ok("a", 1, "s"), ok("a", 2, "s")],
+            "a",
+            0,
+            Validity::Ok,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(out.source, "s");
     }
 
     #[test]
