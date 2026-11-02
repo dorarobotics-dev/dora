@@ -1,0 +1,31 @@
+apiVersion: 1
+name: dora-frame-transform
+namespace: dora-rs
+description: Transform a point cloud into a target frame, statically or composed with a pose.
+categories: [transform]
+keywords: [frames, tf, point-cloud]
+runtime: python
+entrypoint: dora-frame-transform
+build: pip install .
+dora: ">=1.1.0"
+inputs:
+  cloud:
+    required: true
+    type: std/media/v1/PointCloud
+    description: Points in any frame named by frame_id.
+  pose:
+    required: false
+    type: std/math/v1/Pose
+    description: The pose for the one dynamic edge on the route (child_frame in metadata).
+outputs:
+  cloud:
+    type: std/media/v1/PointCloud
+    description: Points in TARGET_FRAME; unplaceable clouds are counted drops, never mislabelled.
+  diag:
+    description: JSON counts (in, out, drops by reason, proc_ns) as UInt8.
+# DORA_FRAMES and DORA_EXTRINSICS are required too, but manifests may not declare DORA_* env
+# (see docs/contract-core/feasibility.md, Friction); the dataflow sets them.
+env:
+  TARGET_FRAME: {description: Frame to transform into.}
+  POINT_FIELDS: {default: xyzi, description: "xyz or xyzi"}
+  DIAG_EVERY: {default: "10", description: Clouds between diag messages.}
