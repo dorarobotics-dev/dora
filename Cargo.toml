@@ -62,6 +62,7 @@ members = [
     "libraries/hub-client",
     "libraries/message",
     "libraries/recording",
+    "libraries/transform",
     "binaries/replay-node",
     "binaries/record-node",
     "libraries/extensions/download",
@@ -143,6 +144,7 @@ dora-mavlink2-bridge = { version = "=1.1.0", path = "libraries/extensions/mavlin
 dora-tensor-pool = { version = "=1.1.0", path = "libraries/extensions/tensor-pool" }
 dora-tensor-pool-python = { version = "=1.1.0", path = "libraries/extensions/tensor-pool/python" }
 dora-message = { version = "=1.1.0", path = "libraries/message" }
+dora-transform = { version = "=1.1.0", path = "libraries/transform" }
 # Version plus a Humble floor; the ROS distro is also a feature of every dora
 # crate that links `ros2-client` (`dora-ros2-bridge`, `dora-ros2-bridge-arrow`),
 # so a build can target another distro without patching this manifest. The floor

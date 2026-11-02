@@ -2856,6 +2856,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dora-transform"
+version = "1.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "drain-recording-node"
 version = "1.1.0"
 dependencies = [

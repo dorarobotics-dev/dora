@@ -1,0 +1,76 @@
+# Frame dictionary. The other half of contract item 14's 端口与坐标系字典.
+#
+# `parent` records the tree the fleet intends. Since 1.1.0 it is load-bearing:
+# `kind` says how a frame relates to its parent, and per-robot extrinsics
+# (robots/<name>/extrinsics.yaml) may calibrate only `mounted` edges.
+#
+# The envelope and the validator still NEVER transform. A frame change happens
+# only inside an operator that declares it, through
+# open_robot_operator.transform, against a calibration the validator has
+# checked. See docs/superpowers/specs/2026-10-20-coordinate-transformation-design.md.
+#
+# kind:
+#   fixed    a root that does not move
+#   dynamic  its pose relative to its parent changes at run time; it comes
+#            from a published openrobot.state.pose message, never from a file
+#   mounted  rigidly attached to its parent; calibrated per robot
+#   none     the frame-less sentinel; never part of a transform
+contract_version: 1.1.0
+frames:
+  - name: none
+    parent: null
+    kind: none
+    description: >-
+      No spatial meaning. For payloads that are not in any frame, such as the
+      diagnostic counters. A Header still needs a frame_id, so frame-less
+      payloads name this one rather than leaving it blank or using 'any'.
+  - name: map
+    parent: null
+    kind: fixed
+    description: The fixed world frame a map is expressed in.
+  - name: odom
+    parent: map
+    kind: dynamic
+    description: Continuous odometric frame; drifts, never jumps.
+  - name: base_footprint
+    parent: odom
+    kind: dynamic
+    description: >-
+      Ground projection of the robot body; the frame wheel odometry reports.
+      The DORA_NAV simulator, its URDF and its odometry (child_frame_id
+      base_footprint) all use this split.
+  - name: base_link
+    parent: base_footprint
+    kind: mounted
+    description: Robot body frame, origin at the chassis centre, x forward, y left, z up.
+  - name: rslidar
+    parent: base_link
+    kind: mounted
+    description: >-
+      The primary 3-D lidar as mounted, whatever its make -- RoboSense, Livox
+      or simulated. Upstream calls it rslidar_frame, livox_frame, lidar or
+      lidar_link; adapters rename to this.
+  - name: camera_front
+    parent: base_link
+    kind: mounted
+    description: Front camera optical frame, z along the optical axis, x right, y down.
+  - name: imu_link
+    parent: base_link
+    kind: mounted
+    description: IMU frame, axes as mounted.
+  - name: tool0
+    parent: base_link
+    kind: dynamic
+    description: >-
+      Manipulator flange frame, for the control operators' IK and force ports.
+      Dynamic because it moves with the joints; its pose comes from forward
+      kinematics, published as a pose, never from a calibration file.
+# Upstream names, mapped to the name to use instead. A rejected name is never
+# an alias: the validator and the library refuse it and say what to use.
+rejected_names:
+  world: map
+  rslidar_frame: rslidar
+  lidar: rslidar
+  lidar_link: rslidar
+  livox_frame: rslidar
+  camera_link: camera_front

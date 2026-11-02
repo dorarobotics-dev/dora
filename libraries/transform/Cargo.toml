@@ -1,0 +1,13 @@
+[package]
+name = "dora-transform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Frame dictionary, per-robot extrinsics and rigid transforms for dora dataflows."
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }

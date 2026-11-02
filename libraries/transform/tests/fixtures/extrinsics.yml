@@ -1,0 +1,38 @@
+# Extrinsic calibration of the simulated mobile robot. Each entry is the pose
+# of `child` in `parent`, for mounted frames only (frames.yaml `kind`).
+#
+# Values copied from the MuJoCo model, not measured:
+#   base_link   mickrobot.xml:29             pos="0 0 0.1" under base_footprint
+#   rslidar     mickrobot.xml:63             lidar_link pos="0.25 0 0.25", identity
+#   camera      mujoco_extensions.xml:10-12  camera_link pos="0.40 0 0.35", and
+#               xyaxes="0 -1 0 0 0 1". MuJoCo cameras look along -z; frames.yaml's
+#               optical frame looks along +z with y down, so the optical axes in
+#               base_link are x=(0,-1,0), y=(0,0,-1), z=(1,0,0), which is the
+#               quaternion (-0.5, 0.5, -0.5, 0.5) in x, y, z, w.
+#   imu_link    mujoco_extensions.xml:14     pos="0 0 0.25", identity
+#
+# Every edge is written out, including the identity rotations: a missing edge
+# is an error, never an assumed zero.
+contract_version: 1.0.0
+robot: simulated-mobile-robot
+calibrated: "2026-10-20"
+source: >-
+  DORA_NAV a9257f5 modules/simulation/mujoco_mickrobot/models/mickrobot.xml
+  and mujoco_extensions.xml (model values, not a physical calibration)
+transforms:
+  - parent: base_footprint
+    child: base_link
+    translation_m: [0.0, 0.0, 0.1]
+    rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+  - parent: base_link
+    child: rslidar
+    translation_m: [0.25, 0.0, 0.25]
+    rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+  - parent: base_link
+    child: camera_front
+    translation_m: [0.40, 0.0, 0.35]
+    rotation_xyzw: [-0.5, 0.5, -0.5, 0.5]
+  - parent: base_link
+    child: imu_link
+    translation_m: [0.0, 0.0, 0.25]
+    rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
