@@ -164,6 +164,7 @@ pub mod config;
 /// Dataflow descriptor types for YAML-based dataflow specifications.
 pub mod descriptor;
 pub mod id;
+pub mod header;
 pub mod metadata;
 
 pub mod coordinator_to_daemon;
