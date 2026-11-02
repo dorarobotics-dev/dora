@@ -1,4 +1,6 @@
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * dora C node API
@@ -77,6 +79,17 @@ unsigned long long read_dora_input_timestamp(void *dora_event);
  * calls with the same `dora_context` are undefined behavior. */
 int dora_send_output(void *dora_context, const char *id_ptr, size_t id_len, const char *data_ptr, size_t data_len);
 
+typedef enum { DORA_PARAM_BOOL = 0, DORA_PARAM_INT = 1, DORA_PARAM_FLOAT = 2, DORA_PARAM_STRING = 3 } DoraParamKind;
+typedef struct { const char *ptr; size_t len; } DoraStr;
+typedef union { bool b; int64_t i; double f; DoraStr s; } DoraParamValue;
+typedef struct { const char *key; size_t key_len; DoraParamKind kind; DoraParamValue value; } DoraParam;
+
+/* Thread-safe: NO. As dora_send_output, plus metadata parameters.
+ * `params` may be NULL when `n_params` is 0. Returns 0, or -1 and sends nothing. */
+int dora_send_output_with_params(void *dora_context, const char *id_ptr, size_t id_len,
+                                 const char *data_ptr, size_t data_len,
+                                 const DoraParam *params, size_t n_params);
+
 /* Thread-safe: NO. Mutates the context's internal logger state. Concurrent
  * calls with the same `dora_context` are undefined behavior. */
 int dora_log(void *dora_context, const char *level_ptr, size_t level_len, const char *msg_ptr, size_t msg_len);
@@ -91,6 +104,7 @@ int dora_log(void *dora_context, const char *level_ptr, size_t level_len, const 
 #define read_dora_input_data        read_dora_input_data
 #define read_dora_input_timestamp   read_dora_input_timestamp
 #define dora_send_output            dora_send_output
+#define dora_send_output_with_params dora_send_output_with_params
 #define dora_log                    dora_log
 
 typedef enum DoraEventType DoraEventType;

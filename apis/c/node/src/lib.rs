@@ -1,10 +1,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use arrow_array::UInt8Array;
-use dora_node_api::{DoraNode, Event, EventStream, arrow_v59::array::AsArray};
+use dora_node_api::{
+    DoraNode, Event, EventStream, MetadataParameters, Parameter, arrow_v59::array::AsArray,
+};
 use eyre::Context;
 use std::{
-    ffi::{c_int, c_void},
+    ffi::{c_char, c_int, c_void},
     ptr, slice,
 };
 
@@ -329,6 +331,128 @@ unsafe fn try_send_output(
         })?)
 }
 
+/// Type tag of a [`DoraParam`] value.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoraParamKind {
+    Bool = 0,
+    Int = 1,
+    Float = 2,
+    String = 3,
+}
+
+/// A borrowed UTF-8 string (not null-terminated).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DoraStr {
+    pub ptr: *const c_char,
+    pub len: usize,
+}
+
+/// Value of a [`DoraParam`]; the active member is selected by `kind`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union DoraParamValue {
+    pub b: bool,
+    pub i: i64,
+    pub f: f64,
+    pub s: DoraStr,
+}
+
+/// A metadata parameter: key (pointer and length, UTF-8) and a typed value.
+#[repr(C)]
+pub struct DoraParam {
+    pub key: *const c_char,
+    pub key_len: usize,
+    pub kind: DoraParamKind,
+    pub value: DoraParamValue,
+}
+
+unsafe fn utf8<'a>(ptr: *const c_char, len: usize, what: &str) -> eyre::Result<&'a str> {
+    if ptr.is_null() && len > 0 {
+        eyre::bail!("{what}: null pointer with non-zero length");
+    }
+    let bytes = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { slice::from_raw_parts(ptr.cast::<u8>(), len) }
+    };
+    std::str::from_utf8(bytes).map_err(|e| eyre::eyre!("{what}: invalid UTF-8: {e}"))
+}
+
+unsafe fn params_to_metadata(
+    params: *const DoraParam,
+    n: usize,
+) -> eyre::Result<MetadataParameters> {
+    let mut out = MetadataParameters::new();
+    if n == 0 {
+        return Ok(out);
+    }
+    if params.is_null() {
+        eyre::bail!("params is null with n_params > 0");
+    }
+    for p in unsafe { slice::from_raw_parts(params, n) } {
+        let key = unsafe { utf8(p.key, p.key_len, "param key") }?;
+        if key.is_empty() {
+            eyre::bail!("param key is empty");
+        }
+        let value = match p.kind {
+            DoraParamKind::Bool => Parameter::Bool(unsafe { p.value.b }),
+            DoraParamKind::Int => Parameter::Integer(unsafe { p.value.i }),
+            DoraParamKind::Float => Parameter::Float(unsafe { p.value.f }),
+            DoraParamKind::String => {
+                let s = unsafe { p.value.s };
+                Parameter::String(unsafe { utf8(s.ptr, s.len, key) }?.to_string())
+            }
+        };
+        out.insert(key.to_string(), value);
+    }
+    Ok(out)
+}
+
+/// Like [`dora_send_output`], with metadata parameters. `params` may be NULL
+/// when `n_params` is 0. Returns 0 on success, -1 on error (nothing is sent).
+///
+/// ## Safety
+///
+/// As for `dora_send_output`; each key and string value must be a valid
+/// pointer/length pair.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dora_send_output_with_params(
+    context: *mut c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    data_ptr: *const u8,
+    data_len: usize,
+    params: *const DoraParam,
+    n_params: usize,
+) -> c_int {
+    let result = (|| -> eyre::Result<()> {
+        let metadata = unsafe { params_to_metadata(params, n_params) }?;
+        if context.is_null() || id_ptr.is_null() {
+            eyre::bail!("null pointer passed to dora_send_output_with_params");
+        }
+        let context: &mut DoraContext = unsafe { &mut *context.cast() };
+        let id = std::str::from_utf8(unsafe { slice::from_raw_parts(id_ptr, id_len) })?;
+        let output_id = id
+            .parse::<dora_node_api::dora_core::config::DataId>()
+            .map_err(|e| eyre::eyre!("invalid output id `{id}`: {e}"))?;
+        let data = unsafe { data_slice(data_ptr, data_len) }?;
+        Ok(context
+            .node
+            .send_output_raw(output_id, metadata, data.len(), |out| {
+                out.copy_from_slice(data)
+            })?)
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(err) => {
+            tracing::error!("{err:?}");
+            -1
+        }
+    }
+}
+
 /// Resolve a C `(ptr, len)` payload pair into a slice, accepting the standard
 /// `(NULL, 0)` idiom for an empty message.
 ///
@@ -519,5 +643,44 @@ mod tests {
         let data =
             unsafe { data_slice(buf.as_ptr(), buf.len()) }.expect("valid pointer yields a slice");
         assert_eq!(data, &buf);
+    }
+
+    #[test]
+    fn params_convert_with_types_and_refuse_bad_input() {
+        let key = b"frame_id";
+        let val = b"rslidar";
+        let seq = b"header_seq";
+        let params = [
+            DoraParam {
+                key: key.as_ptr().cast(),
+                key_len: key.len(),
+                kind: DoraParamKind::String,
+                value: DoraParamValue {
+                    s: DoraStr {
+                        ptr: val.as_ptr().cast(),
+                        len: val.len(),
+                    },
+                },
+            },
+            DoraParam {
+                key: seq.as_ptr().cast(),
+                key_len: seq.len(),
+                kind: DoraParamKind::Int,
+                value: DoraParamValue { i: 7 },
+            },
+        ];
+        let out = unsafe { params_to_metadata(params.as_ptr(), params.len()) }.unwrap();
+        assert_eq!(out.get("frame_id"), Some(&Parameter::String("rslidar".into())));
+        assert_eq!(out.get("header_seq"), Some(&Parameter::Integer(7)));
+        assert!(unsafe { params_to_metadata(std::ptr::null(), 0) }.unwrap().is_empty());
+        assert!(unsafe { params_to_metadata(std::ptr::null(), 1) }.is_err());
+        let bad = [0xffu8, 0xfe];
+        let p = [DoraParam {
+            key: bad.as_ptr().cast(),
+            key_len: 2,
+            kind: DoraParamKind::Bool,
+            value: DoraParamValue { b: true },
+        }];
+        assert!(unsafe { params_to_metadata(p.as_ptr(), 1) }.is_err());
     }
 }

@@ -1,0 +1,10 @@
+nodes:
+  - id: c_node
+    path: build/c_node
+    inputs:
+      tick: dora/timer/millis/50
+    outputs: [out]
+  - id: receiver
+    path: receiver.py
+    inputs:
+      out: c_node/out
