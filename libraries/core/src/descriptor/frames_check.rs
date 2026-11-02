@@ -5,6 +5,11 @@
 //! and check 6 (a frame change needs a calibration that supports it), with
 //! frame resolution as in its `resolve_frame`. The declarations come from
 //! the nodes' `output_frames`/`input_frames` instead of an operators file.
+//!
+//! An unknown frame name is reported once, at the producer that declares it.
+//! The reference also reports the route of every consumer of that output; here
+//! a consumer's route check skips an input whose frame is not in the
+//! dictionary, so one bad name yields one violation.
 
 use crate::descriptor::{Descriptor, normalize_path};
 use dora_message::{
@@ -12,7 +17,7 @@ use dora_message::{
     descriptor::{EnvValue, Node},
 };
 use dora_transform::{Extrinsics, FrameDict, FrameError, Kind};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -50,14 +55,29 @@ struct Ctx<'a> {
 
 impl<'a> Ctx<'a> {
     /// A variable as the node would see it at launch: its own `env` over the
-    /// dataflow-level `env`. Trimmed; an empty value counts as unset.
+    /// dataflow-level `env`. The raw value, untrimmed; an empty value counts
+    /// as unset (also when it overrides a non-empty dataflow-level value).
     fn env(&self, node: &Node, var: &str) -> Option<String> {
         node.env
             .as_ref()
             .and_then(|e| e.get(var))
             .or_else(|| self.global_env?.get(var))
-            .map(|v| v.to_string().trim().to_string())
+            .map(|v| v.to_string())
             .filter(|v| !v.is_empty())
+    }
+
+    /// The type URN of `node`'s input `port`: its own `input_types` entry,
+    /// else the `output_types` entry of the node output wired to it.
+    fn port_type(&self, node: &'a Node, port: &str) -> Option<&'a str> {
+        if let Some(t) = node.input_types.get(port) {
+            return Some(t);
+        }
+        let up = upstream(node, port)?;
+        self.nodes
+            .get(up.source.as_ref() as &str)?
+            .output_types
+            .get(up.output.as_str())
+            .map(String::as_str)
     }
 
     /// The frame `node_id`'s output `port` resolves to, following `same_as:`
@@ -122,19 +142,16 @@ fn is_frame_name(value: &str) -> bool {
 /// The node output that feeds `node`'s input `input`, if another node
 /// produces it. Timers and log subscriptions are not node edges.
 fn upstream<'n>(node: &'n Node, input: &str) -> Option<&'n UserInputMapping> {
-    let (_, input) = node
-        .inputs
-        .iter()
-        .find(|(k, _)| k.as_str() as &str == input)?;
-    match &input.mapping {
+    match &node.inputs.get(input)?.mapping {
         InputMapping::User(m) => Some(m),
         InputMapping::Timer { .. } | InputMapping::Logs(_) => None,
     }
 }
 
 /// Run the frame checks. A dataflow without a `frames:` key has none.
-/// `base_dir` is the dataflow file's directory; `frames:` paths and a node's
-/// `DORA_EXTRINSICS` resolve against it, as dora runs nodes from there.
+/// `base_dir` is the dataflow file's directory; `frames:` paths resolve
+/// against it, and a node's relative `DORA_EXTRINSICS` against the directory
+/// the node is launched from (see [`launch_dir`]).
 pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolation> {
     let Some(cfg) = &dataflow.frames else {
         return vec![];
@@ -229,15 +246,11 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
     // 3-5. transform: a frame change needs a calibration that supports it.
     for node in &dataflow.nodes {
         let nid = node.id.to_string();
-        let is_pose = |port: &str| {
-            node.input_types
-                .iter()
-                .any(|(k, t)| k.as_str() == port && t == POSE_TYPE)
-        };
+        let is_pose = |port: &str| ctx.port_type(node, port) == Some(POSE_TYPE);
 
         // The frames this node's data inputs resolve to. A pose input is what
         // a transform composes with, not data it moves, so it is skipped.
-        let mut inputs = Vec::new();
+        let mut inputs = BTreeSet::new();
         for port in node.inputs.keys() {
             let p = port.as_str();
             if is_pose(p) {
@@ -259,10 +272,10 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
             if want != "any" && want != frame {
                 continue; // a frame the input refuses is check 2's violation, not a transform
             }
-            inputs.push(frame);
+            inputs.insert(frame);
         }
 
-        let mut changes = Vec::new();
+        let mut changes = BTreeSet::new();
         for (port, declared) in &node.output_frames {
             if declared.starts_with("same_as:") {
                 continue;
@@ -289,7 +302,7 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
             }
             for src in &inputs {
                 if *src != out_frame {
-                    changes.push((src.clone(), out_frame.clone(), p.to_string()));
+                    changes.insert((src.clone(), out_frame.clone(), p.to_string()));
                 }
             }
         }
@@ -334,19 +347,8 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
 
         match ctx.env(node, EXTRINSICS_ENV) {
             Some(named) => {
-                let launched = resolve_path(&base_dir.join(&named));
-                let checked = resolve_path(&ex_path);
-                if launched != checked {
-                    push(
-                        "transform",
-                        &nid,
-                        EXTRINSICS_ENV,
-                        format!(
-                            "launches with {} but was validated against {}; a robot must run the calibration it was checked with",
-                            launched.display(),
-                            checked.display()
-                        ),
-                    );
+                if let Some(message) = calibration_violation(node, &named, base_dir, &ex_path) {
+                    push("transform", &nid, EXTRINSICS_ENV, message);
                 }
             }
             None if !changes.is_empty() => push(
@@ -361,6 +363,45 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
         }
     }
     out
+}
+
+/// Why the calibration `named` (the node's `DORA_EXTRINSICS`) is not the
+/// one at `checked_path` that the dataflow was validated against, if so.
+fn calibration_violation(
+    node: &Node,
+    named: &str,
+    base_dir: &Path,
+    checked_path: &Path,
+) -> Option<String> {
+    let named_path = Path::new(named);
+    if named_path.is_relative() && node.git.is_some() {
+        return Some(format!(
+            "{EXTRINSICS_ENV} '{named}' is relative and the node runs from its git checkout, so the calibration cannot be checked before launch; use an absolute path"
+        ));
+    }
+    let launched = resolve_path(&launch_dir(node, base_dir).join(named_path));
+    if !launched.exists() {
+        return Some(format!("{} does not exist", launched.display()));
+    }
+    let checked = resolve_path(checked_path);
+    if launched != checked {
+        return Some(format!(
+            "launches with {} but was validated against {}; a robot must run the calibration it was checked with",
+            launched.display(),
+            checked.display()
+        ));
+    }
+    None
+}
+
+/// The directory the daemon starts a (non-git) node in: `deploy.working_dir`
+/// joined onto the dataflow directory (so an absolute one wins), else the
+/// dataflow directory. Mirrors `binaries/daemon/src/dataflow_lifecycle.rs`.
+fn launch_dir(node: &Node, base_dir: &Path) -> PathBuf {
+    node.deploy
+        .as_ref()
+        .and_then(|d| d.working_dir.as_ref())
+        .map_or_else(|| base_dir.to_path_buf(), |w| base_dir.join(w))
 }
 
 /// Like Python's non-strict `Path.resolve()`: absolute, `..` collapsed, and

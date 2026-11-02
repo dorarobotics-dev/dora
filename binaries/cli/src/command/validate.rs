@@ -179,14 +179,15 @@ fn validate_dataflow(dataflow: &Path, strict_types: bool, offline: bool) -> eyre
             println!("  - {w}");
         }
         println!("{count} type warning(s) found.");
-        if strict {
-            bail!("{count} type warning(s) found (--strict mode)");
-        }
     }
 
-    // Frame, route and calibration checks; only with a `frames:` key.
+    // Frame, route and calibration checks; only with a `frames:` key. They
+    // run even when --strict will fail on type warnings, so one run reports
+    // both. Frame errors fail regardless of --strict.
+    let mut frame_errors = 0;
     if descriptor.frames.is_some() {
         let frame_violations = check_frames(&descriptor, working_dir);
+        frame_errors = frame_violations.len();
         if frame_violations.is_empty() {
             println!("Frames OK.");
         } else {
@@ -194,9 +195,70 @@ fn validate_dataflow(dataflow: &Path, strict_types: bool, offline: bool) -> eyre
             for v in &frame_violations {
                 println!("  - {v}");
             }
-            bail!("{} frame error(s) found", frame_violations.len());
         }
     }
 
+    let type_failures = if strict { count } else { 0 };
+    match (type_failures, frame_errors) {
+        (0, 0) => {}
+        (tw, 0) => bail!("{tw} type warning(s) found (--strict mode)"),
+        (0, fe) => bail!("{fe} frame error(s) found"),
+        (tw, fe) => bail!("{tw} type warning(s) (--strict) and {fe} frame error(s) found"),
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_dataflow;
+    use std::path::Path;
+
+    const FRAMES: &str = "../../libraries/core/tests/frames_check/frames.yml";
+    const EXTRINSICS: &str = "../../libraries/core/tests/frames_check/extrinsics.yml";
+
+    /// sim/cloud is a PointCloud in `rslidar`; the sink declares it a Pose
+    /// (a type warning) in `base_link` (a frame error).
+    const DATAFLOW: &str = "\
+frames: {dictionary: frames.yml, extrinsics: extrinsics.yml}
+nodes:
+  - id: sim
+    path: sim.py
+    outputs: [cloud]
+    output_types: {cloud: std/media/v1/PointCloud}
+    output_frames: {cloud: rslidar}
+  - id: sink
+    path: sink.py
+    inputs: {cloud: sim/cloud}
+    input_types: {cloud: std/math/v1/Pose}
+    input_frames: {cloud: base_link}
+";
+
+    fn validate(yaml: &str, strict: bool) -> Result<(), String> {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        std::fs::copy(manifest.join(FRAMES), dir.path().join("frames.yml")).unwrap();
+        std::fs::copy(manifest.join(EXTRINSICS), dir.path().join("extrinsics.yml")).unwrap();
+        let path = dir.path().join("dataflow.yml");
+        std::fs::write(&path, yaml).unwrap();
+        validate_dataflow(&path, strict, true).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn strict_type_warnings_do_not_hide_frame_errors() {
+        assert_eq!(
+            validate(DATAFLOW, true).unwrap_err(),
+            "1 type warning(s) (--strict) and 1 frame error(s) found"
+        );
+        assert_eq!(
+            validate(DATAFLOW, false).unwrap_err(),
+            "1 frame error(s) found"
+        );
+        let frames_ok = DATAFLOW.replace("cloud: base_link", "cloud: rslidar");
+        assert_eq!(
+            validate(&frames_ok, true).unwrap_err(),
+            "1 type warning(s) found (--strict mode)"
+        );
+        assert_eq!(validate(&frames_ok, false), Ok(()));
+    }
 }
