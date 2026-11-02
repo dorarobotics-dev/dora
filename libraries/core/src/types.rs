@@ -1580,4 +1580,48 @@ mod tests {
             DataType::LargeList(_)
         ));
     }
+
+    #[test]
+    fn spatial_std_types_require_the_header_keys() {
+        let reg = TypeRegistry::new();
+        let keys = |urn: &str| -> Vec<String> {
+            reg.resolve(urn)
+                .unwrap()
+                .metadata
+                .iter()
+                .map(|m| m.key.clone())
+                .collect()
+        };
+        for urn in ["std/media/v1/PointCloud", "std/media/v1/Image"] {
+            let k = keys(urn);
+            assert!(
+                k.contains(&"frame_id".to_string()) && k.contains(&"stamp_ns".to_string()),
+                "{urn}: {k:?}"
+            );
+        }
+        for urn in ["std/math/v1/Pose", "std/math/v1/Transform"] {
+            let k = keys(urn);
+            for want in ["frame_id", "child_frame", "stamp_ns"] {
+                assert!(k.contains(&want.to_string()), "{urn}: {k:?}");
+            }
+        }
+        let pc = reg.resolve("std/media/v1/PointCloud").unwrap();
+        assert_eq!(
+            pc.params
+                .iter()
+                .map(|p| (p.name.as_str(), p.default.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![("fields", Some("xyz"))]
+        );
+        // The `fields` parameter and the struct `fields:` list do not collide.
+        assert_eq!(pc.fields.len(), 3);
+        assert!(types_match(
+            "std/media/v1/PointCloud[fields=xyzi]",
+            "std/media/v1/PointCloud"
+        ));
+        assert!(!types_match(
+            "std/media/v1/PointCloud[fields=xyzi]",
+            "std/media/v1/PointCloud[fields=xyz]"
+        ));
+    }
 }

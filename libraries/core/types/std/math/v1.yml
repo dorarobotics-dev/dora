@@ -24,6 +24,13 @@ types:
   Pose:
     arrow: Struct
     description: "6-DOF pose (position Vector3 + orientation Quaternion)"
+    metadata:
+      - key: frame_id
+        description: "Parent frame the pose is expressed in"
+      - key: child_frame
+        description: "Frame whose pose this is"
+      - key: stamp_ns
+        description: "Capture time, integer nanoseconds"
     fields:
       - name: position
         type: Vector3
@@ -32,6 +39,13 @@ types:
   Transform:
     arrow: Struct
     description: "Coordinate transform (translation Vector3 + rotation Quaternion)"
+    metadata:
+      - key: frame_id
+        description: "Parent frame the pose is expressed in"
+      - key: child_frame
+        description: "Frame whose pose this is"
+      - key: stamp_ns
+        description: "Capture time, integer nanoseconds"
     fields:
       - name: translation
         type: Vector3

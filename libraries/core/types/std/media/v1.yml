@@ -2,6 +2,11 @@ types:
   Image:
     arrow: Struct
     description: "Raw image with width, height, encoding, data fields"
+    metadata:
+      - key: frame_id
+        description: "Frame the data is expressed in (frame dictionary name)"
+      - key: stamp_ns
+        description: "Capture time, integer nanoseconds"
     fields:
       - name: width
         type: UInt32
@@ -16,7 +21,15 @@ types:
     description: "JPEG/PNG compressed image bytes"
   PointCloud:
     arrow: Struct
-    description: "3D point cloud with XYZ coordinates and optional fields"
+    description: "3D point cloud: packed float32 points (layout given by the `fields` parameter, xyz or xyzi), width and height"
+    params:
+      - name: fields
+        default: xyz
+    metadata:
+      - key: frame_id
+        description: "Frame the data is expressed in (frame dictionary name)"
+      - key: stamp_ns
+        description: "Capture time, integer nanoseconds"
     fields:
       - name: points
         type: LargeBinary
