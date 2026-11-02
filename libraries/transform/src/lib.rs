@@ -27,7 +27,8 @@ pub enum FrameError {
     #[error("{0}")]
     MissingExtrinsic(String),
     /// A static path crosses edges only a published pose can give.
-    /// `edges` holds every dynamic edge as (child, parent), in route order.
+    /// `edges` holds (child, parent) pairs: the upward edges from `src` first,
+    /// then the downward edges from `dst` (each listed from `dst` upward).
     #[error("{message}")]
     DynamicEdge {
         message: String,

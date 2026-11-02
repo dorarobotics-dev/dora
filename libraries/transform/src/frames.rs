@@ -41,8 +41,8 @@ pub struct Frame {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameDict {
-    pub frames: BTreeMap<String, Frame>,
-    pub rejected: BTreeMap<String, String>,
+    frames: BTreeMap<String, Frame>,
+    rejected: BTreeMap<String, String>,
 }
 
 fn invalid<T>(msg: String) -> Result<T> {
@@ -53,7 +53,7 @@ impl FrameDict {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| FrameError::Invalid(format!("{}: {e}", path.display())))?;
-        Self::parse(&text)
+        Self::parse(&text).map_err(|e| FrameError::Invalid(format!("{}: {e}", path.display())))
     }
 
     pub fn parse(text: &str) -> Result<Self> {
@@ -159,6 +159,19 @@ impl FrameDict {
             }
         }
         Ok(FrameDict { frames, rejected })
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Frame> {
+        self.frames.get(name)
+    }
+
+    pub fn frames(&self) -> &BTreeMap<String, Frame> {
+        &self.frames
+    }
+
+    /// Upstream names the dictionary refuses, mapped to the frame to use.
+    pub fn rejected(&self) -> &BTreeMap<String, String> {
+        &self.rejected
     }
 
     pub fn require(&self, name: &str) -> Result<&Frame> {
