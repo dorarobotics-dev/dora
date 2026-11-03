@@ -204,3 +204,138 @@ def test_config_reads_a_good_environment(calib_env):
     extrinsics, target, step, diag_every = node_main.config()
     assert (target, step, diag_every) == ("base_link", 4, 10)
     assert extrinsics.path == str(FIX / "extrinsics.yml")
+
+
+# --- malformed messages are counted drops, never a crash -----------------------
+
+def _pose_row(**override):
+    row = {"position": {"x": 1.0, "y": 2.0, "z": 0.0},
+           "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}}
+    for path, v in override.items():
+        part, key = path.split("__")
+        if v is _DROP:
+            del row[part][key]
+        else:
+            row[part][key] = v
+    return row
+
+
+_DROP = object()
+
+
+def test_a_pose_missing_a_component_is_a_value_error(ex):
+    with pytest.raises(ValueError, match=r"orientation\.w"):
+        on_pose(pa.array([_pose_row(orientation__w=_DROP)]), pose_meta(), ex.frames)
+
+
+def test_a_pose_with_a_null_component_is_a_value_error(ex):
+    with pytest.raises(ValueError, match=r"position\.y"):
+        on_pose(pa.array([_pose_row(position__y=None)]), pose_meta(), ex.frames)
+
+
+def test_an_empty_pose_message_is_a_value_error(ex):
+    empty = pa.array([], type=pose_arrow().type)
+    with pytest.raises(ValueError, match="empty"):
+        on_pose(empty, pose_meta(), ex.frames)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_pose_with_a_non_finite_value_is_a_value_error(ex, bad):
+    with pytest.raises(ValueError, match="finite"):
+        on_pose(pa.array([_pose_row(position__x=bad)]), pose_meta(), ex.frames)
+
+
+def _cloud(points, width, height):
+    p = np.ascontiguousarray(points, dtype="<f4")
+    return pa.array([{"points": p.tobytes(), "width": width, "height": height}],
+                    type=cloud_to_arrow(pts()).type)
+
+
+def test_a_cloud_without_points_is_a_value_error():
+    a = pa.array([{"width": 1, "height": 1}],
+                 type=pa.struct([("width", pa.uint32()), ("height", pa.uint32())]))
+    with pytest.raises(ValueError, match="points"):
+        cloud_from_arrow(a, 4)
+
+
+def test_an_xyz_cloud_read_as_xyzi_is_refused_by_width_times_height():
+    """4 xyz points are 12 floats, which also divide into 3 xyzi points."""
+    four_xyz = np.arange(12, dtype="<f4").reshape(4, 3)
+    with pytest.raises(ValueError, match=r"width\*height"):
+        cloud_from_arrow(_cloud(four_xyz, 4, 1), 4)
+    assert cloud_from_arrow(_cloud(four_xyz, 4, 1), 3).shape == (4, 3)
+
+
+def test_an_organised_cloud_counts_width_times_height():
+    grid = np.zeros((6, 4), dtype="<f4")
+    assert cloud_from_arrow(_cloud(grid, 3, 2), 4).shape == (6, 4)
+    with pytest.raises(ValueError, match=r"width\*height"):
+        cloud_from_arrow(_cloud(grid, 3, 3), 4)
+
+
+def test_a_cloud_not_divisible_by_the_stride_is_a_value_error():
+    with pytest.raises(ValueError, match="whole number"):
+        cloud_from_arrow(_cloud(np.zeros(5, dtype="<f4"), 1, 1), 4)
+
+
+def test_an_empty_cloud_message_is_a_value_error():
+    with pytest.raises(ValueError, match="empty"):
+        cloud_from_arrow(pa.array([], type=cloud_to_arrow(pts()).type), 4)
+
+
+# --- drop labels: bad_frame only for frame faults ------------------------------
+
+def _on_cloud(ex, value, metadata, target="base_footprint", step=4):
+    return node_main.on_cloud(value, metadata, step=step, extrinsics=ex, target=target,
+                              take=seqs(), pose=None)
+
+
+def test_a_good_cloud_is_published(ex):
+    moved, out, drops, error = _on_cloud(ex, cloud_to_arrow(pts()), hdr().to_metadata())
+    assert moved is not None and out.frame_id == "base_footprint" and drops == {} and error is None
+
+
+def test_a_stripped_frame_id_is_a_bad_frame(ex):
+    m = hdr().to_metadata()
+    del m["frame_id"]
+    moved, _, drops, error = _on_cloud(ex, cloud_to_arrow(pts()), m)
+    assert moved is None and drops == {"bad_frame": 1} and "frame_id" in str(error)
+
+
+def test_an_unknown_frame_is_a_bad_frame(ex):
+    moved, _, drops, _ = _on_cloud(ex, cloud_to_arrow(pts()), hdr(frame="lidar_link").to_metadata())
+    assert moved is None and drops == {"bad_frame": 1}
+
+
+def test_a_header_that_does_not_parse_is_a_bad_header(ex):
+    m = hdr().to_metadata()
+    m["validity"] = "fine"
+    moved, _, drops, _ = _on_cloud(ex, cloud_to_arrow(pts()), m)
+    assert moved is None and drops == {"bad_header": 1}
+
+
+def test_a_misshapen_cloud_is_malformed(ex):
+    four_xyz = np.zeros((4, 3), dtype="<f4")
+    moved, _, drops, error = _on_cloud(ex, _cloud(four_xyz, 4, 1), hdr().to_metadata())
+    assert moved is None and drops == {"malformed": 1} and "width*height" in str(error)
+
+
+def test_a_cloud_without_points_is_malformed(ex):
+    a = pa.array([{"width": 1, "height": 1}],
+                 type=pa.struct([("width", pa.uint32()), ("height", pa.uint32())]))
+    _, _, drops, _ = _on_cloud(ex, a, hdr().to_metadata())
+    assert drops == {"malformed": 1}
+
+
+def test_the_manifest_declares_the_point_layout_it_reads():
+    import yaml
+    manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / "dora-node.yml").read_text())
+    assert manifest["inputs"]["cloud"]["type"] == "std/media/v1/PointCloud[fields=xyzi]"
+    assert manifest["outputs"]["cloud"]["type"] == "std/media/v1/PointCloud[fields=xyzi]"
+    assert manifest["env"]["POINT_FIELDS"]["default"] == "xyzi"
+
+
+def test_pyproject_declares_dora():
+    import tomllib
+    meta = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+    assert any(d.replace(" ", "").startswith("dora-rs") for d in meta["project"]["dependencies"])

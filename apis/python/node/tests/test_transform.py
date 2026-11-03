@@ -24,11 +24,20 @@ def test_lookup_and_apply_packed(ex):
 def test_errors_are_typed(ex):
     with pytest.raises(tf.DynamicEdgeError) as e:
         tf.lookup(ex, "rslidar", "map")
-    assert len(e.value.args[1]) == 2
+    assert len(e.value.edges) == 2
     with pytest.raises(tf.UnknownFrameError, match="'rslidar'"):
         tf.lookup(ex, "lidar_link", "base_link")
     assert issubclass(tf.MissingExtrinsicError, tf.FrameError)
     assert issubclass(tf.FrameError, ValueError)
+
+
+def test_dynamic_edge_error_prints_its_message_and_carries_the_edges(ex):
+    with pytest.raises(tf.DynamicEdgeError) as e:
+        tf.lookup(ex, "rslidar", "map")
+    text = str(e.value)
+    assert isinstance(text, str) and not text.startswith("(")
+    assert text == e.value.args[0]
+    assert e.value.edges == [("base_footprint", "odom"), ("odom", "map")]
 
 
 def test_resolve_with_pose(ex):

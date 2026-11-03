@@ -2757,6 +2757,48 @@ nodes:
         assert!(warnings[0].message.contains("Image"));
     }
 
+    fn point_cloud_edge(out_urn: &str, in_urn: &str) -> Vec<TypeWarning> {
+        let dataflow = parse_dataflow(&format!(
+            "\
+nodes:
+  - id: lidar
+    outputs:
+      - cloud
+    output_types:
+      cloud: \"{out_urn}\"
+  - id: transform
+    inputs:
+      cloud: lidar/cloud
+    input_types:
+      cloud: \"{in_urn}\"
+",
+        ));
+        let reg = TypeRegistry::new();
+        check_type_annotations_full(&dataflow, &reg, true).warnings
+    }
+
+    #[test]
+    fn type_check_point_cloud_layouts_that_differ_are_a_mismatch() {
+        let warnings = point_cloud_edge(
+            "std/media/v1/PointCloud[fields=xyz]",
+            "std/media/v1/PointCloud[fields=xyzi]",
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("type mismatch"));
+        assert!(warnings[0].message.contains("fields=xyz]"));
+        assert!(warnings[0].message.contains("fields=xyzi]"));
+    }
+
+    #[test]
+    fn type_check_point_cloud_same_layout_or_unparameterised_side_matches() {
+        let xyzi = "std/media/v1/PointCloud[fields=xyzi]";
+        assert!(point_cloud_edge(xyzi, xyzi).is_empty());
+        // An unparameterised side is a wildcard (upstream behaviour), even
+        // though the type's declared default is `fields=xyz`.
+        assert!(point_cloud_edge("std/media/v1/PointCloud", xyzi).is_empty());
+        assert!(point_cloud_edge(xyzi, "std/media/v1/PointCloud").is_empty());
+    }
+
     // --- Phase 1: strict mode tests ---
 
     #[test]

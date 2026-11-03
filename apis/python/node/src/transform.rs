@@ -21,7 +21,14 @@ fn to_py(e: CoreError) -> PyErr {
         CoreError::UnknownFrame(m) => UnknownFrameError::new_err(m),
         CoreError::MissingExtrinsic(m) => MissingExtrinsicError::new_err(m),
         CoreError::FrameOrder(m) => FrameOrderError::new_err(m),
-        CoreError::DynamicEdge { message, edges } => DynamicEdgeError::new_err((message, edges)),
+        CoreError::DynamicEdge { message, edges } => {
+            // str(e) is the message; the crossed edges ride along as `e.edges`.
+            let err = DynamicEdgeError::new_err(message);
+            Python::attach(|py| match err.value(py).setattr("edges", edges) {
+                Ok(()) => err,
+                Err(attach_error) => attach_error,
+            })
+        }
     }
 }
 

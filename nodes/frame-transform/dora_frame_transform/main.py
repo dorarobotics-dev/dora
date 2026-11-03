@@ -25,11 +25,35 @@ def config():
     return extrinsics, target, ITEM_STEP[fields], int(os.environ.get("DIAG_EVERY", "10"))
 
 
+def on_cloud(value, metadata, *, step, extrinsics, target, take, pose):
+    """One cloud off the wire -> (moved, out_header, drops, error). Every fault
+    is a counted drop under its own label: `bad_frame` for frame faults (no or
+    unknown frame_id, no route), `bad_header` for a header that does not parse,
+    `malformed` for a cloud that does not decode."""
+    frame = metadata.get("frame_id") if isinstance(metadata, dict) else None
+    if not isinstance(frame, str) or not frame:
+        return None, None, {"bad_frame": 1}, ValueError(f"cloud carries no frame_id (got {frame!r})")
+    try:
+        header = Header.from_metadata(metadata)
+    except ValueError as error:
+        return None, None, {"bad_header": 1}, error
+    try:
+        points = cloud_from_arrow(value, step)
+    except ValueError as error:
+        return None, None, {"malformed": 1}, error
+    try:
+        moved, out, drops = process(points, header, extrinsics=extrinsics, target_frame=target,
+                                    take_seq=take, pose=pose)
+    except tf.FrameError as error:
+        return None, None, {"bad_frame": 1}, error
+    return moved, out, drops, None
+
+
 def main():
     extrinsics, target, step, diag_every = config()
     node = Node()
     pose, seq, n_in = None, 0, 0
-    drops, logged = Counter(), False
+    drops, logged = Counter(), set()
 
     def take():
         nonlocal seq
@@ -49,15 +73,12 @@ def main():
             continue
         n_in += 1
         started = time.perf_counter_ns()
-        try:
-            header = Header.from_metadata(event["metadata"])
-            moved, out, d = process(cloud_from_arrow(event["value"], step), header,
-                                    extrinsics=extrinsics, target_frame=target, take_seq=take, pose=pose)
-        except ValueError as error:  # tf.FrameError is a ValueError
-            moved, out, d = None, None, {"bad_frame": 1}
-            if not logged:
-                node.log("info", f"dropping clouds as bad_frame: {error}")
-                logged = True
+        moved, out, d, error = on_cloud(event["value"], event["metadata"], step=step,
+                                        extrinsics=extrinsics, target=target, take=take, pose=pose)
+        if error is not None:
+            for label in d.keys() - logged:  # log the first drop of each kind
+                node.log("info", f"dropping clouds as {label}: {error}")
+                logged.add(label)
         drops.update(d)
         if moved is not None:
             node.send_output("cloud", cloud_to_arrow(moved), out.to_metadata())
