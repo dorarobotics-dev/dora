@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Apply one mutation at a time, run the suites, restore, report.
+"""Apply one mutation at a time, run every suite, restore, report.
 
-A mutation no test notices is a hole in the suite. Nothing else may run tests
-in this copy while this runs. Exit status is non-zero if any mutation survives.
+A mutation no test notices is a hole in the suite. Every suite runs for every
+mutation and the per-suite result is printed, so "suite X catches it" is
+evidence, not inference. A mutation is caught when a suite's tests fail; a
+suite that does not build is reported as `build` and does not count. Some
+mutations must be caught by a named suite (REQUIRED). Nothing else may run
+tests in this copy while this runs. Exit status is non-zero if any mutation
+survives, only breaks the build, or misses its required suite.
 """
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -38,6 +44,9 @@ MUTATIONS = [
      "    let [x, y, z, w] = q;", "    let [w, x, y, z] = q;"),
     ("13. a calibration file may carry a dynamic edge", "libraries/transform/src/extrinsics.rs",
      "            if frame.kind != Kind::Mounted {", "            if frame.kind != Kind::Mounted && frame.kind != Kind::Dynamic {"),
+    ("D1. the node builds its output header by hand, always ok, bypassing derive", FT,
+     "    out = derive([header], target_frame, take_seq(), validity, reason)",
+     '    out = Header(target_frame, take_seq(), header.stamp_ns, header.source, "ok")'),
     ("14. a cloud composed with a stale pose is forwarded as ok", FT,
      '        return "stale", "stale_pose"', "        return \"ok\", None"),
     ("15. the validator skips the transform check", "libraries/core/src/descriptor/frames_check.rs",
@@ -50,37 +59,46 @@ MUTATIONS = [
      "            Ok(frame) if frame != \"any\" && frame != parent => {", "            Ok(frame) if false && frame != \"any\" && frame != parent => {"),
 ]
 
-SUITES = [
-    ["cargo", "test", "-q", "-p", "dora-message", "header::"],
-    ["cargo", "test", "-q", "-p", "dora-transform"],
-    ["cargo", "test", "-q", "-p", "dora-core", "--test", "frames_check"],
-    ["bash", "-c", f"cd apis/python/node && {VENV}/bin/maturin develop -q --release && "
-                   f"{VENV_PY} -m pytest -q -p no:cacheprovider tests/test_transform.py tests/test_header.py"],
-    ["bash", "-c", f"cd nodes/frame-transform && {VENV_PY} -B -m pytest -q -p no:cacheprovider tests"],
-]
+SUITES = {
+    "rust-header": ["cargo", "test", "-q", "-p", "dora-message", "header::"],
+    "rust-transform": ["cargo", "test", "-q", "-p", "dora-transform"],
+    "rust-frames-check": ["cargo", "test", "-q", "-p", "dora-core", "--test", "frames_check"],
+    "py-binding": ["bash", "-c", f"cd apis/python/node && {VENV}/bin/maturin develop -q --release && "
+                                 f"{VENV_PY} -m pytest -q -p no:cacheprovider tests/test_transform.py tests/test_header.py"],
+    "py-node": ["bash", "-c", f"cd nodes/frame-transform && {VENV_PY} -B -m pytest -q -p no:cacheprovider tests"],
+}
+
+# Mutations a specific suite must catch (label prefix -> suite).
+REQUIRED = {
+    "H1.": "py-binding",
+    "H2.": "py-binding",
+}
+
+BUILD_ERROR = re.compile(r"error\[E\d{4}\]|error: could not compile|maturin failed")
 
 
 def run(cmd):
     return subprocess.run(cmd, cwd=ROOT, env=ENV, capture_output=True, text=True)
 
 
-def caught() -> bool:
-    for cmd in SUITES:
-        if run(cmd).returncode != 0:
-            return True
-    return False
+def outcome(cmd) -> str:
+    """`pass`, `FAIL` (tests failed) or `build` (the suite did not build)."""
+    r = run(cmd)
+    if r.returncode == 0:
+        return "pass"
+    return "build" if BUILD_ERROR.search(r.stdout + r.stderr) else "FAIL"
 
 
 def main() -> int:
     if "--baseline" in sys.argv:
-        for cmd in SUITES:
+        for name, cmd in SUITES.items():
             r = run(cmd)
-            print(f"rc={r.returncode} {' '.join(cmd)[:90]}")
+            print(f"rc={r.returncode} {name}")
             if r.returncode:
                 print(r.stdout[-2000:], r.stderr[-2000:])
                 return 1
         return 0
-    survivors = []
+    problems = []
     try:
         for label, rel, anchor, replacement in MUTATIONS:
             path = ROOT / rel
@@ -90,17 +108,29 @@ def main() -> int:
                 return 2
             path.write_text(original.replace(anchor, replacement))
             try:
-                ok = caught()
+                results = {name: outcome(cmd) for name, cmd in SUITES.items()}
             finally:
                 path.write_text(original)
-            print(f"{'caught  ' if ok else 'SURVIVED'} {label}", flush=True)
-            if not ok:
-                survivors.append(label)
+            caught_by = [n for n, r in results.items() if r == "FAIL"]
+            required = next((s for p, s in REQUIRED.items() if label.startswith(p)), None)
+            if not caught_by:
+                verdict = "BUILD   " if "build" in results.values() else "SURVIVED"
+            elif required and required not in caught_by:
+                verdict = "MISSED  "
+            else:
+                verdict = "caught  "
+            print(f"{verdict} {label}", flush=True)
+            print("         " + "  ".join(f"{n}={r}" for n, r in results.items())
+                  + (f"  (requires {required})" if required else ""), flush=True)
+            if verdict != "caught  ":
+                problems.append(f"{verdict.strip()} {label}")
     finally:
         # rebuild the unmutated binding so the venv is left clean
-        run(SUITES[3])
-    print(f"{len(survivors)}/{len(MUTATIONS)} survive")
-    return 1 if survivors else 0
+        run(SUITES["py-binding"])
+    for p in problems:
+        print(p)
+    print(f"{len(problems)}/{len(MUTATIONS)} not caught as required")
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

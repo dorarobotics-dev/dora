@@ -48,6 +48,18 @@ fn validity_arg(value: &str) -> PyResult<Validity> {
     Validity::parse(value).map_err(to_py)
 }
 
+/// `Header`'s `validity` argument. Omitted, it is ok; an explicit `None` is
+/// refused like any other non-str, never read as ok.
+struct ValidityArg(Validity);
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ValidityArg {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        validity_arg(&str_arg("validity", &obj)?).map(Self)
+    }
+}
+
 /// One metadata value as the wire would carry it. Anything else is refused
 /// rather than coerced, so `None` never becomes the string "None".
 fn to_parameter(key: &str, value: &Bound<'_, PyAny>) -> PyResult<Parameter> {
@@ -74,13 +86,16 @@ pub struct PyHeader(pub core::Header);
 #[pymethods]
 impl PyHeader {
     #[new]
-    #[pyo3(signature = (frame_id, seq, stamp_ns, source, validity=None, reason=None, child_frame=None))]
+    #[pyo3(
+        signature = (frame_id, seq, stamp_ns, source, validity=ValidityArg(Validity::Ok), reason=None, child_frame=None),
+        text_signature = "(frame_id, seq, stamp_ns, source, validity='ok', reason=None, child_frame=None)"
+    )]
     fn new(
         frame_id: &Bound<'_, PyAny>,
         seq: &Bound<'_, PyAny>,
         stamp_ns: &Bound<'_, PyAny>,
         source: &Bound<'_, PyAny>,
-        validity: Option<&Bound<'_, PyAny>>,
+        validity: ValidityArg,
         reason: Option<&Bound<'_, PyAny>>,
         child_frame: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
@@ -90,10 +105,7 @@ impl PyHeader {
             int_arg("seq", seq)?,
             int_arg("stamp_ns", stamp_ns)?,
             str_arg("source", source)?,
-            match validity {
-                Some(v) => validity_arg(&str_arg("validity", v)?)?,
-                None => Validity::Ok,
-            },
+            validity.0,
             reason,
         )
         .map_err(to_py)?;

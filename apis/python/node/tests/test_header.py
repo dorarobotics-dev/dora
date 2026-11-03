@@ -4,6 +4,8 @@ Every rule lives in Rust; these tests pin that the binding reaches each one,
 ported from `libraries/message/src/header.rs` tests.
 """
 
+import inspect
+
 import pytest
 
 from dora import header as hd
@@ -78,6 +80,16 @@ def test_every_degraded_validity_needs_a_non_empty_reason(v):
         with pytest.raises(ValueError, match="non-empty reason"):
             Header("map", 0, 1, "s", v, reason)
     assert Header("map", 0, 1, "s", v, "why").reason == "why"
+
+
+def test_an_explicit_none_validity_is_refused_not_read_as_ok():
+    # Only an omitted validity defaults to ok; None is a missing value.
+    for call in (lambda: Header("map", 0, 1, "s", None),
+                 lambda: Header("map", 0, 1, "s", validity=None)):
+        with pytest.raises(ValueError, match="validity must be a str"):
+            call()
+    assert Header("map", 0, 1, "s").validity == "ok"
+    assert inspect.signature(Header).parameters["validity"].default == "ok"
 
 
 @pytest.mark.parametrize("bad", ["broken", "OK", "", "none"])
