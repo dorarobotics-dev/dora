@@ -732,8 +732,11 @@ mod tests {
             let out = unsafe { params_to_metadata(p.as_ptr(), 1) }.unwrap();
             assert_eq!(out.get("k"), Some(&Parameter::Bool(b)));
         }
-        // a non-0/1 byte in a C _Bool must not be UB
-        let p = [mk(0, DoraParamValue { i: 2 })];
+        // a non-0/1 byte in a C _Bool must not be UB. The bool is the
+        // union's first byte on any endianness, so write that byte itself.
+        let mut value = DoraParamValue { i: 0 };
+        unsafe { std::ptr::addr_of_mut!(value).cast::<u8>().write(2) };
+        let p = [mk(0, value)];
         let out = unsafe { params_to_metadata(p.as_ptr(), 1) }.unwrap();
         assert_eq!(out.get("k"), Some(&Parameter::Bool(true)));
     }

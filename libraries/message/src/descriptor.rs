@@ -253,7 +253,11 @@ impl TypeRuleDef {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FramesConfig {
+    /// The frame dictionary (`frames.yml`): every frame name the dataflow may
+    /// declare. A node's `DORA_FRAMES` must name this file.
     pub dictionary: PathBuf,
+    /// The robot's extrinsic calibration: the mounted edges between frames.
+    /// A node's `DORA_EXTRINSICS` must name this file.
     pub extrinsics: PathBuf,
 }
 

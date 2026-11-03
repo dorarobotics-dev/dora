@@ -771,3 +771,39 @@ fn dictionary_paths_are_not_trimmed() {
         "{v:?}"
     );
 }
+
+// A pose output in a frame the dictionary does not know is check 1's
+// violation only, not a transform violation as well.
+
+#[test]
+fn an_unknown_pose_frame_is_reported_once() {
+    let sim = SIM.replace("odom_pose: odom}", "odom_pose: nowhere}");
+    let v = run(&format!(
+        "{HEAD}{sim}{}",
+        transform_node("odom", true, "extrinsics.yml")
+    ));
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(v[0].starts_with("unknown_frame:sim:odom_pose"), "{v:?}");
+}
+
+// A route crossing the dynamic edge from child side to parent side and back.
+
+#[test]
+fn a_route_from_the_dynamic_edges_parent_to_its_child_side_is_covered() {
+    // odom -> rslidar crosses odom -> base_footprint the other way round.
+    let sim = SIM.replace("cloud: rslidar,", "cloud: odom,");
+    let v = run(&format!(
+        "{HEAD}{sim}{}",
+        transform_node("rslidar", true, "extrinsics.yml")
+    ));
+    assert!(v.is_empty(), "{v:?}");
+    let v = run(&format!(
+        "{HEAD}{sim}{}",
+        transform_node("rslidar", false, "extrinsics.yml")
+    ));
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(
+        v[0].starts_with("transform:ft:cloud") && v[0].contains("std/math/v1/Pose"),
+        "{v:?}"
+    );
+}

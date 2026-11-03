@@ -339,7 +339,14 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
                             ))
                         } else {
                             let (child, parent) = &edges[0];
-                            pose_violation(&ctx, node, &message, (src, dst), (parent, child))
+                            pose_violation(
+                                &ctx,
+                                &frames,
+                                node,
+                                &message,
+                                (src, dst),
+                                (parent, child),
+                            )
                         }
                     }
                     Err(e) => Some(e.to_string()),
@@ -381,9 +388,11 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
 /// `parent -> child` that `message` reports, if so. A pose input covers it
 /// when its upstream output's frame is `parent` or is undeclared (`any`,
 /// unresolvable here): the pose's `child_frame` has no descriptor field, so
-/// only its parent frame is checked.
+/// only its parent frame is checked. A pose frame the dictionary does not
+/// know is check 1's violation, so it is not reported again here.
 fn pose_violation(
     ctx: &Ctx<'_>,
+    frames: &FrameDict,
     node: &Node,
     message: &str,
     (src, dst): (&str, &str),
@@ -400,7 +409,7 @@ fn pose_violation(
             continue;
         };
         match ctx.resolve(up.source.as_ref(), up.output.as_str()) {
-            Ok(frame) if frame != "any" && frame != parent => {
+            Ok(frame) if frame != "any" && frame != parent && frames.get(&frame).is_some() => {
                 wrong.push(format!(
                     "pose input '{p}' ({}/{}) is in '{frame}'",
                     up.source, up.output
@@ -419,6 +428,7 @@ fn pose_violation(
         wrong.join(", ")
     ))
 }
+
 /// Why the file `named` by the node's `var` (its `what`) is not the one at
 /// `checked_path` that the dataflow was validated against, if so.
 fn pin_violation(

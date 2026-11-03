@@ -56,7 +56,8 @@ MUTATIONS = [
     ("F1. a node may launch with a different frame dictionary than was checked", "libraries/core/src/descriptor/frames_check.rs",
      "            (FRAMES_ENV, &dict_path, \"frame dictionary\"),\n", ""),
     ("P1. a pose in another frame than the dynamic edge's parent covers it", "libraries/core/src/descriptor/frames_check.rs",
-     "            Ok(frame) if frame != \"any\" && frame != parent => {", "            Ok(frame) if false && frame != \"any\" && frame != parent => {"),
+     "            Ok(frame) if frame != \"any\" && frame != parent && frames.get(&frame).is_some() => {",
+     "            Ok(frame) if false && frame != \"any\" && frame != parent && frames.get(&frame).is_some() => {"),
 ]
 
 SUITES = {

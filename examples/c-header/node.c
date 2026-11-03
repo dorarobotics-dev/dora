@@ -27,7 +27,11 @@ int main(void) {
             str_param("validity", "ok"),
         };
         const char data[] = "x";
-        if (dora_send_output_with_params(ctx, "out", strlen("out"), data, 1, params, 5) != 0) return 2;
+        if (dora_send_output_with_params(ctx, "out", strlen("out"), data, 1, params, 5) != 0) {
+            free_dora_event(event);
+            free_dora_context(ctx);
+            return 2;
+        }
         free_dora_event(event);
     }
     free_dora_context(ctx);

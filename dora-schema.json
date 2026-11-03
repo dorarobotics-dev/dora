@@ -221,9 +221,11 @@
       "type": "object",
       "properties": {
         "dictionary": {
+          "description": "The frame dictionary (`frames.yml`): every frame name the dataflow may\ndeclare. A node's `DORA_FRAMES` must name this file.",
           "type": "string"
         },
         "extrinsics": {
+          "description": "The robot's extrinsic calibration: the mounted edges between frames.\nA node's `DORA_EXTRINSICS` must name this file.",
           "type": "string"
         }
       },
