@@ -161,9 +161,9 @@ What the earlier checker could not prove. The final review found that the
 checker used for the first version of this report (DORA_NAV a6a8008) judged
 each transformed cloud's frame, `header_seq` order and validity, and the
 median ground error; nothing it judged depended on the pose. The ground check
-cannot: the sim's odometry pose is
-planar (z = 0, yaw only), so a node that ignored the pose, inverted it or took
-it from the wrong time would still put the ground at z ≈ 0 in `odom`. It also
+cannot: the sim's odometry pose is planar (z = 0, yaw only), so a node that
+ignored the pose, inverted it or took it from the wrong time would still put
+the ground at z ≈ 0 in `odom`. It also
 had no drop cap, so a node that dropped most clouds would have passed. The
 headline numbers did not change (579 `ok`, median 0.0029 m); what changed is
 what they prove: the pose is now verified on every cloud against an independent
@@ -265,10 +265,10 @@ DORA_NAV:
 | Live-run records | 6 | 0 | 211 | 0 |
 | **Total** | 28 | 825 | 406 | 16 |
 
-Everything in dora is additive (5 lines removed in total, still 5 at f70c3de9c). The only edits to
-existing dora behaviour are `dora validate` reporting frame errors alongside
-`--strict` type warnings, and `metadata.rs`'s key-uniqueness test listing the
-header's sequence key.
+Everything in dora is additive (5 lines removed in total, still 5 at
+f70c3de9c). The only edits to existing dora behaviour are `dora validate`
+reporting frame errors alongside `--strict` type warnings, and `metadata.rs`'s
+key-uniqueness test listing the header's sequence key.
 
 ## What did not fit dora's model
 
@@ -318,8 +318,8 @@ Each item: what, why, and the upstream change it implies.
    The second option also removes the class of fault mutations 16 and F1 test
    (a node launched with a calibration or dictionary other than the checked
    one).
-7. **Launch directory is daemon logic.** To compare a node's
-   `DORA_FRAMES` and `DORA_EXTRINSICS` with the checked files, the frame check mirrors the
+7. **Launch directory is daemon logic.** To compare a node's `DORA_FRAMES` and
+   `DORA_EXTRINSICS` with the checked files, the frame check mirrors the
    daemon's working-directory rule (`deploy.working_dir` over the dataflow
    directory), and a git-sourced node must give an absolute path because its
    checkout directory is unknown before launch. Upstream: one shared
@@ -349,8 +349,8 @@ Each item: what, why, and the upstream change it implies.
     Added `dora_send_output_with_params` with a `DoraParam` array. The kind is
     read as a `u32` and checked, so an unknown kind is an error. A bool is read
     as its first byte and not checked: any non-zero byte reads as true, so a C
-    `_Bool` holding a value other than 0 or 1 is not undefined behaviour. Upstream: this function, plus
-    reading metadata in the C input API.
+    `_Bool` holding a value other than 0 or 1 is not undefined behaviour.
+    Upstream: this function, plus reading metadata in the C input API.
 13. **Wiring faults are dora's.** Unknown nodes and outputs, timer syntax and
     duplicate ids are checked by dora's own wiring check and parser, which
     stop at the first fault; the reference reported every edge. Those
@@ -371,11 +371,11 @@ Each item: what, why, and the upstream change it implies.
     from the URDF, whose geometry differs; the extrinsics are measured from
     the generated model (DORA_NAV 9376bd1). Upstream (DORA_NAV, feature map
     22.02): relative mesh paths in the tracked model.
-17. **Planar odometry.** A yaw-only odom pose with a rigidly mounted
-    `base_link` cannot represent the spawn settling transient (the measured
-    max) or chassis pitch (a real limitation, not observed here). The run is
-    judged on the median and on every cloud from 1 s after the first one,
-    which excludes the spawn transient only. Upstream (DORA_NAV): publish a full 6-DoF pose, or a
+17. **Planar odometry.** A yaw-only odom pose with a rigidly mounted `base_link`
+    cannot represent the spawn settling transient (the measured max) or chassis
+    pitch (a real limitation, not observed here). The run is judged on the
+    median and on every cloud from 1 s after the first one, which excludes the
+    spawn transient only. Upstream (DORA_NAV): publish a full 6-DoF pose, or a
     mounted-frame pose, when the chassis is not planar.
 18. **Isolation came free.** `dora run` uses an embedded daemon with no
     coordinator (Friction 13 (c)). Upstream: document it; no change.
@@ -412,22 +412,35 @@ Each item: what, why, and the upstream change it implies.
 ## Effort for later slices
 
 Basis. This slice ported a working, tested reference: 18 dora commits before
-this report and 7 DORA_NAV commits, about 2.5k lines of code and 2.9k lines of tests in dora and 0.8k plus
-0.4k in DORA_NAV. The final review after this report found gaps (a checker
-that could not prove the pose was used, a Python header duplicating the Rust
-one, unchecked point layout, an unpinned frame dictionary) whose fixes took
-5 dora and 6 DORA_NAV commits, about 1 engineer-day. Five of the nine dora feature commits needed a review-fix
-commit (header key clash, private fields, orientation-dependent false rejection,
-`--strict` hiding frame errors, undefined behaviour in the C API), and mapping
-the reference tests afterwards found 59 missing tests and one behaviour gap. For
-an engineer doing the same work by hand, with review, we estimate this slice at
-12-15 engineer-days, about 400-450 lines of code plus tests per day, plus the
-final review's fixes, about 1 engineer-day: 13-16 in all. That rate is
-used below for items with a reference implementation ("built, to move" or
-"basis exists" with code to wrap). Items with no reference ("new") are
-estimated from their scope at roughly half that rate, plus time for upstream
-design discussion where the feature map says it is needed. Estimates are for
-one engineer and exclude the delivery-sheet records unless named.
+this report and 7 DORA_NAV commits, about 2.5k lines of code and 2.9k lines of
+tests in dora and 0.8k plus 0.4k in DORA_NAV. Five of the nine dora feature
+commits needed a review-fix commit (header key clash, private fields,
+orientation-dependent false rejection, `--strict` hiding frame errors,
+undefined behaviour in the C API), and mapping the reference tests afterwards
+found 59 missing tests and one behaviour gap. For an engineer doing the same
+work by hand, with review, we estimate that work at 12-15 engineer-days, about
+400-450 lines of code plus tests per day.
+
+The final review after this report found gaps (a checker that could not prove
+the pose was used, a Python header duplicating the Rust one, unchecked point
+layout, an unpinned frame dictionary). Their fixes are 5 dora and 6 DORA_NAV
+commits adding 1738 + 1317 = 3055 lines (Size of each change, above); without
+the 181 lines of regenerated run records, 2874 lines. On the same basis that
+is 2874 / 450 ≈ 6.4 to 2874 / 400 ≈ 7.2, so about 6-7 engineer-days, and the
+slice as a whole is 12-15 + 6-7 = 18-22 engineer-days. (The fix round
+actually took about one working day of agent time; that is not the basis used
+here.)
+
+The rate of 400-450 lines per day, not this slice's total, is the yardstick
+below, so the later estimates do not change with the fix round. It is used
+for items with a reference implementation ("built, to move" or "basis exists"
+with code to wrap). Items with no reference ("new") are estimated from their
+scope at roughly half that rate, plus time for upstream design discussion
+where the feature map says it is needed. The rate includes ordinary review;
+this slice's final review added about 44 % more lines (2874 on top of about
+6.6k), so a later slice that needs a similar late fix round would take
+correspondingly longer than its estimate. Estimates are for one engineer and
+exclude the delivery-sheet records unless named.
 
 ### What this slice delivered against the feature map
 
@@ -553,7 +566,7 @@ work on top.
 
 | Slice | Engineer-days | Confidence |
 |---|---:|---|
-| This slice (contract core), for reference | 13-16 | measured from the work done, including about 1 day of fixes after the final review |
+| This slice (contract core), for reference | 18-22 | estimate on the same basis: 12-15 for the work before the final review plus 6-7 for its fixes (which took about one working day of agent time) |
 | Perception (row 13) | 40 | medium: foundation done, algorithms new |
 | Agent path | 41 (+12-15 security) | low: no reference implementation, upstream design needed |
 | Data processing (row 16) | 21 | high: tested reference, same pattern as this slice |
