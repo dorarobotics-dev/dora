@@ -19,11 +19,16 @@ ENV.update(PYTHONPATH="", PYO3_PYTHON=VENV_PY, VIRTUAL_ENV=VENV)
 
 MUTATIONS = [
     ("3. output publishes its input's frame", FT,
-     "    out = Header(target_frame,", "    out = Header(header.frame_id,"),
+     "    out = derive([header], target_frame,", "    out = derive([header], header.frame_id,"),
     ("4. an upgrade is granted but never counted", "libraries/message/src/header.rs",
      "        (up.count)(up.reason);", "        let _ = up;"),
     ("7. a degraded validity is laundered into ok", FT,
      "    validity, reason = header.validity, header.reason", '    validity, reason = "ok", None'),
+    ("H1. a degraded validity needs no reason", "libraries/message/src/header.rs",
+     "            (v, None) if *v != Validity::Ok => {", "            (v, None) if false && *v != Validity::Ok => {"),
+    ("H2. a bool is accepted as an int", "libraries/message/src/header.rs",
+     "            Some(Parameter::Integer(i)) => Ok(*i),",
+     "            Some(Parameter::Integer(i)) => Ok(*i),\n            Some(Parameter::Bool(b)) => Ok(i64::from(*b)),"),
     ("10. a missing extrinsic is quietly treated as identity", "libraries/transform/src/extrinsics.rs",
      "                Some(edge) => out.push(edge.clone()),\n                None => {",
      "                Some(edge) => out.push(edge.clone()),\n                None if true => continue,\n                None => {"),
@@ -46,7 +51,7 @@ SUITES = [
     ["cargo", "test", "-q", "-p", "dora-transform"],
     ["cargo", "test", "-q", "-p", "dora-core", "--test", "frames_check"],
     ["bash", "-c", f"cd apis/python/node && {VENV}/bin/maturin develop -q --release && "
-                   f"{VENV_PY} -m pytest -q -p no:cacheprovider tests/test_transform.py"],
+                   f"{VENV_PY} -m pytest -q -p no:cacheprovider tests/test_transform.py tests/test_header.py"],
     ["bash", "-c", f"cd nodes/frame-transform && {VENV_PY} -B -m pytest -q -p no:cacheprovider tests"],
 ]
 

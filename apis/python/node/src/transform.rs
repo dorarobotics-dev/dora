@@ -23,11 +23,13 @@ fn to_py(e: CoreError) -> PyErr {
         CoreError::FrameOrder(m) => FrameOrderError::new_err(m),
         CoreError::DynamicEdge { message, edges } => {
             // str(e) is the message; the crossed edges ride along as `e.edges`.
+            // If attaching them fails, the frame error still wins: it is the
+            // fault the caller handles, and it must stay a DynamicEdgeError.
             let err = DynamicEdgeError::new_err(message);
-            Python::attach(|py| match err.value(py).setattr("edges", edges) {
-                Ok(()) => err,
-                Err(attach_error) => attach_error,
-            })
+            Python::attach(|py| {
+                let _ = err.value(py).setattr("edges", edges);
+            });
+            err
         }
     }
 }

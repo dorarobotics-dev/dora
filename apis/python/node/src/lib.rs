@@ -23,6 +23,7 @@ use pyo3::types::{PyBytes, PyDict};
 use tokio::runtime::{Builder, Runtime};
 use tracing::{Level, span};
 
+mod header;
 mod sample_handler;
 mod transform;
 use sample_handler::SampleHandler;
@@ -1336,6 +1337,7 @@ fn dora(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build, &m)?)?;
     m.add_class::<Node>()?;
     transform::register(&m)?;
+    header::register(&m)?;
     m.setattr("__version__", env!("CARGO_PKG_VERSION"))?;
     m.setattr("__author__", "Dora-rs Authors")?;
 

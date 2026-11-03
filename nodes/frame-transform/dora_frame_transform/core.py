@@ -14,50 +14,9 @@ import numpy as np
 import pyarrow as pa
 
 from dora import transform as tf
+from dora.header import Header, derive
 
-VALIDITY = ("ok", "missing", "stale", "unpaired", "low_confidence", "rejected")
 POSE_MAX_AGE_MS = 100
-
-
-@dataclass(frozen=True)
-class Header:
-    frame_id: str
-    seq: int
-    stamp_ns: int
-    source: str
-    validity: str = "ok"
-    reason: Optional[str] = None
-
-    def __post_init__(self):
-        if not isinstance(self.frame_id, str) or not self.frame_id:
-            raise ValueError(f"frame_id must be a non-empty str, got {self.frame_id!r}")
-        if not isinstance(self.source, str) or not self.source:
-            raise ValueError(f"source must be a non-empty str, got {self.source!r}")
-        for name, value, floor in (("seq", self.seq, 0), ("stamp_ns", self.stamp_ns, 1)):
-            if isinstance(value, bool) or not isinstance(value, int) or value < floor:
-                raise ValueError(f"{name} must be an int >= {floor}, got {value!r}")
-        if self.validity not in VALIDITY:
-            raise ValueError(f"unknown validity {self.validity!r}; expected one of {VALIDITY}")
-        if self.validity == "ok" and self.reason is not None:
-            raise ValueError("reason must be None when validity is ok")
-        if self.validity != "ok" and not self.reason:
-            raise ValueError(f"validity {self.validity!r} requires a non-empty reason")
-
-    def to_metadata(self) -> dict:
-        m = {"frame_id": self.frame_id, "header_seq": self.seq, "stamp_ns": self.stamp_ns,
-             "source": self.source, "validity": self.validity}
-        if self.reason is not None:
-            m["reason"] = self.reason
-        return m
-
-    @classmethod
-    def from_metadata(cls, m) -> "Header":
-        if not isinstance(m, dict):
-            raise ValueError(f"metadata must be a mapping, got {m!r}")
-        missing = [k for k in ("frame_id", "header_seq", "stamp_ns", "source", "validity") if k not in m]
-        if missing:
-            raise ValueError(f"metadata carries no contract header; missing {missing}")
-        return cls(m["frame_id"], m["header_seq"], m["stamp_ns"], m["source"], m["validity"], m.get("reason"))
 
 
 @dataclass(frozen=True)
@@ -113,10 +72,10 @@ def cloud_to_arrow(points: np.ndarray) -> pa.Array:
 def on_pose(value, metadata, frames) -> Pose:
     """One pose off the wire. Raises ValueError on a bad message; the caller
     counts a `bad_pose` drop and keeps the previous pose."""
-    child = (metadata or {}).get("child_frame")
-    if not isinstance(child, str) or not child:
-        raise ValueError("a pose message needs a 'child_frame' metadata entry naming the frame whose pose it is")
     header = Header.from_metadata(metadata)
+    child = header.child_frame
+    if child is None:
+        raise ValueError("a pose message needs a 'child_frame' metadata entry naming the frame whose pose it is")
     row = _first_row(value, "pose")
     values = []  # read by name, never by position
     for part, keys in (("position", "xyz"), ("orientation", "xyzw")):
@@ -145,8 +104,10 @@ def process(points: np.ndarray, header: Header, *, extrinsics, target_frame: str
             take_seq: Callable[[], int], pose: Optional[Pose] = None,
             max_age_ms: int = POSE_MAX_AGE_MS) -> Tuple[Optional[np.ndarray], Optional[Header], Dict[str, int]]:
     """Transform one cloud. A cloud that cannot be placed in `target_frame` is a
-    counted drop, never published under a frame it is not in. Raises
-    tf.FrameError on an unknown frame (the caller counts `bad_frame`)."""
+    counted drop, never published under a frame it is not in. The output
+    header is derived from the input's (stamp and source carry over) and keeps
+    its validity: derive() refuses to turn a degraded input into an ok output.
+    Raises tf.FrameError on an unknown frame (the caller counts `bad_frame`)."""
     transform, used_pose = tf.resolve(extrinsics, header.frame_id, target_frame,
                                       pose.transform if pose else None)
     if transform is None:
@@ -154,7 +115,7 @@ def process(points: np.ndarray, header: Header, *, extrinsics, target_frame: str
     validity, reason = header.validity, header.reason
     if used_pose and validity == "ok":
         validity, reason = _pose_quality(header, pose, max_age_ms)
-    out = Header(target_frame, take_seq(), header.stamp_ns, header.source, validity, reason)
+    out = derive([header], target_frame, take_seq(), validity, reason)
     step = points.shape[1]
     moved = np.frombuffer(transform.apply_packed(np.ascontiguousarray(points, dtype="<f4").tobytes(), step),
                           dtype="<f4").reshape(-1, step)

@@ -66,6 +66,8 @@ EXEMPT_MODULE_NAMES = frozenset(
         "testing",
         # Native submodule over dora-transform; registered in sys.modules.
         "transform",
+        # Native submodule over dora_message::header; registered in sys.modules.
+        "header",
         # The native extension module. Every Python package exposes its
         # submodules as attributes; this is the language, not an API decision.
         "dora",

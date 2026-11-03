@@ -14,7 +14,9 @@ use std::fmt;
 /// Coordinate frame the payload is expressed in.
 pub const FRAME_ID: &str = "frame_id";
 /// Per-output counter >= 0, so a gap means loss on the edge.
-pub const SEQ: &str = "header_seq";
+///
+/// Not [`crate::metadata::SEQ`] (`"seq"`), which numbers streaming chunks.
+pub const HEADER_SEQ: &str = "header_seq";
 /// Capture time in integer nanoseconds on the producer's clock.
 pub const STAMP_NS: &str = "stamp_ns";
 /// Name of the producing node, or the sorted `+`-joined parent sources.
@@ -23,8 +25,19 @@ pub const SOURCE: &str = "source";
 pub const VALIDITY: &str = "validity";
 /// Why the message is degraded; absent when validity is `ok`.
 pub const REASON: &str = "reason";
-/// The frame whose pose a Pose/Transform message gives.
+/// The frame whose pose a Pose/Transform message gives; optional, non-empty when present.
 pub const CHILD_FRAME: &str = "child_frame";
+
+/// Every header key, in wire order.
+pub const KEYS: [&str; 7] = [
+    FRAME_ID,
+    HEADER_SEQ,
+    STAMP_NS,
+    SOURCE,
+    VALIDITY,
+    REASON,
+    CHILD_FRAME,
+];
 
 /// Error for a malformed or inconsistent header.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,21 +117,26 @@ impl Validity {
 }
 
 /// The contract header. Build it with [`Header::new`], [`Header::read`] or [`derive`].
+///
+/// The fields are private and every constructor checks the header rules, so a
+/// `Header` value is always valid: [`Header::write`] never puts an invalid
+/// header on the wire. Code outside this module cannot reach in and change a
+/// field after construction:
+///
+/// ```compile_fail,E0616
+/// use dora_message::header::{Header, Validity};
+/// let mut h = Header::new("map", 0, 1, "s", Validity::Stale, Some("old".into())).unwrap();
+/// h.validity = Validity::Ok; // error[E0616]: field `validity` is private
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct Header {
-    /// Coordinate frame of the payload; non-empty.
-    pub frame_id: String,
-    /// Per-output counter, >= 0.
-    pub seq: i64,
-    /// Capture time in nanoseconds, >= 1.
-    pub stamp_ns: i64,
-    /// Producing node or joined parent sources; non-empty.
-    pub source: String,
-    /// Whether the payload can be trusted.
-    pub validity: Validity,
-    /// Required and non-empty when degraded, absent when `ok`.
-    pub reason: Option<String>,
+    frame_id: String,
+    seq: i64,
+    stamp_ns: i64,
+    source: String,
+    validity: Validity,
+    reason: Option<String>,
+    child_frame: Option<String>,
 }
 
 impl Header {
@@ -137,6 +155,7 @@ impl Header {
             source: source.into(),
             validity,
             reason,
+            child_frame: None,
         };
         if h.frame_id.is_empty() {
             return err("frame_id must be a non-empty string");
@@ -169,10 +188,57 @@ impl Header {
         Ok(h)
     }
 
-    /// Write the header into `params`. `reason` is omitted when absent.
+    /// The same header, naming the frame whose pose it gives (Pose/Transform
+    /// messages). `child_frame` must be non-empty.
+    pub fn with_child_frame(mut self, child_frame: impl Into<String>) -> Result<Self, HeaderError> {
+        let child_frame = child_frame.into();
+        if child_frame.is_empty() {
+            return err("child_frame must be a non-empty string when present");
+        }
+        self.child_frame = Some(child_frame);
+        Ok(self)
+    }
+
+    /// Coordinate frame of the payload; non-empty.
+    pub fn frame_id(&self) -> &str {
+        &self.frame_id
+    }
+
+    /// Per-output counter, >= 0.
+    pub fn seq(&self) -> i64 {
+        self.seq
+    }
+
+    /// Capture time in nanoseconds, >= 1.
+    pub fn stamp_ns(&self) -> i64 {
+        self.stamp_ns
+    }
+
+    /// Producing node or joined parent sources; non-empty.
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// Whether the payload can be trusted.
+    pub fn validity(&self) -> Validity {
+        self.validity
+    }
+
+    /// Why the payload is degraded; `None` exactly when validity is `ok`.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// The frame whose pose a Pose/Transform message gives, if set.
+    pub fn child_frame(&self) -> Option<&str> {
+        self.child_frame.as_deref()
+    }
+
+    /// Write the header into `params`. `reason` and `child_frame` are written
+    /// when set and removed when not, so no stale value survives.
     pub fn write(&self, params: &mut MetadataParameters) {
         params.insert(FRAME_ID.into(), Parameter::String(self.frame_id.clone()));
-        params.insert(SEQ.into(), Parameter::Integer(self.seq));
+        params.insert(HEADER_SEQ.into(), Parameter::Integer(self.seq));
         params.insert(STAMP_NS.into(), Parameter::Integer(self.stamp_ns));
         params.insert(SOURCE.into(), Parameter::String(self.source.clone()));
         params.insert(
@@ -185,6 +251,14 @@ impl Header {
             }
             None => {
                 params.remove(REASON);
+            }
+        }
+        match &self.child_frame {
+            Some(c) => {
+                params.insert(CHILD_FRAME.into(), Parameter::String(c.clone()));
+            }
+            None => {
+                params.remove(CHILD_FRAME);
             }
         }
     }
@@ -205,23 +279,25 @@ impl Header {
             )),
             None => err(format!("incomplete contract header; missing {key:?}")),
         };
-        let reason = match params.get(REASON) {
-            Some(Parameter::String(s)) => Some(s.clone()),
-            Some(other) => {
-                return err(format!(
-                    "metadata key {REASON:?} must be a string, got {other:?}"
-                ));
-            }
-            None => None,
+        let optional = |key: &str| match params.get(key) {
+            Some(Parameter::String(s)) => Ok(Some(s.clone())),
+            Some(other) => err(format!(
+                "metadata key {key:?} must be a string, got {other:?}"
+            )),
+            None => Ok(None),
         };
-        Header::new(
+        let header = Header::new(
             string(FRAME_ID)?,
-            integer(SEQ)?,
+            integer(HEADER_SEQ)?,
             integer(STAMP_NS)?,
             string(SOURCE)?,
             Validity::parse(&string(VALIDITY)?)?,
-            reason,
-        )
+            optional(REASON)?,
+        )?;
+        match optional(CHILD_FRAME)? {
+            Some(child) => header.with_child_frame(child),
+            None => Ok(header),
+        }
     }
 }
 
@@ -353,7 +429,7 @@ mod tests {
     fn read_refuses_a_wrongly_typed_key() {
         let mut params = MetadataParameters::new();
         ok("map", 1, "s").write(&mut params);
-        params.insert(SEQ.into(), Parameter::String("3".into()));
+        params.insert(HEADER_SEQ.into(), Parameter::String("3".into()));
         let err = Header::read(&params).unwrap_err().to_string();
         assert!(err.contains("seq"), "{err}");
     }
@@ -369,10 +445,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(out.stamp_ns, 4);
-        assert_eq!(out.source, "cam+lidar");
-        assert_eq!(out.frame_id, "map");
-        assert_eq!(out.seq, 2);
+        assert_eq!(out.stamp_ns(), 4);
+        assert_eq!(out.source(), "cam+lidar");
+        assert_eq!(out.frame_id(), "map");
+        assert_eq!(out.seq(), 2);
     }
 
     #[test]
@@ -390,7 +466,7 @@ mod tests {
             .is_err()
         );
         let out = derive(&[stale], "a", 0, Validity::Stale, Some("old".into()), None).unwrap();
-        assert_eq!(out.validity, Validity::Stale);
+        assert_eq!(out.validity(), Validity::Stale);
     }
 
     #[test]
@@ -456,8 +532,8 @@ mod tests {
             .write(&mut params);
         ok("map", 2, "s").write(&mut params);
         let back = Header::read(&params).unwrap();
-        assert_eq!(back.validity, Validity::Ok);
-        assert_eq!(back.reason, None);
+        assert_eq!(back.validity(), Validity::Ok);
+        assert_eq!(back.reason(), None);
     }
 
     #[test]
@@ -513,12 +589,74 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(out.source, "s");
+        assert_eq!(out.source(), "s");
     }
 
     #[test]
     fn derive_needs_a_parent() {
         assert!(derive(&[], "a", 0, Validity::Ok, None, None).is_err());
+    }
+
+    #[test]
+    fn child_frame_round_trips_when_set() {
+        let h = ok("odom", 1, "s")
+            .with_child_frame("base_footprint")
+            .unwrap();
+        assert_eq!(h.child_frame(), Some("base_footprint"));
+        let mut params = MetadataParameters::new();
+        h.write(&mut params);
+        assert_eq!(
+            params.get(CHILD_FRAME),
+            Some(&Parameter::String("base_footprint".into()))
+        );
+        assert_eq!(Header::read(&params).unwrap(), h);
+    }
+
+    #[test]
+    fn child_frame_is_absent_unless_set() {
+        let h = ok("odom", 1, "s");
+        assert_eq!(h.child_frame(), None);
+        let mut params = MetadataParameters::new();
+        params.insert(CHILD_FRAME.into(), Parameter::String("stale".into()));
+        h.write(&mut params);
+        assert!(!params.contains_key(CHILD_FRAME));
+        assert_eq!(Header::read(&params).unwrap().child_frame(), None);
+    }
+
+    #[test]
+    fn child_frame_must_be_a_non_empty_string() {
+        let err = ok("odom", 1, "s")
+            .with_child_frame("")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("child_frame"), "{err}");
+        for bad in [
+            Parameter::String(String::new()),
+            Parameter::Integer(3),
+            Parameter::Bool(true),
+        ] {
+            let mut params = MetadataParameters::new();
+            ok("odom", 1, "s").write(&mut params);
+            params.insert(CHILD_FRAME.into(), bad);
+            let err = Header::read(&params).unwrap_err().to_string();
+            assert!(err.contains("child_frame"), "{err}");
+        }
+    }
+
+    #[test]
+    fn getters_expose_every_field() {
+        let h = Header::new("map", 3, 7, "s", Validity::Stale, Some("old".into())).unwrap();
+        assert_eq!(
+            (
+                h.frame_id(),
+                h.seq(),
+                h.stamp_ns(),
+                h.source(),
+                h.validity(),
+                h.reason()
+            ),
+            ("map", 3, 7, "s", Validity::Stale, Some("old"))
+        );
     }
 
     // Parity with the reference suite (docs/contract-core/test-mapping.md).
@@ -551,19 +689,19 @@ mod tests {
             assert!(Header::new("map", 0, 1, "s", v, None).is_err());
             assert!(Header::new("map", 0, 1, "s", v, Some(String::new())).is_err());
             let h = Header::new("map", 0, 1, "s", v, Some("why".into())).unwrap();
-            assert_eq!(h.reason.as_deref(), Some("why"));
+            assert_eq!(h.reason(), Some("why"));
         }
     }
 
     #[test]
     fn seq_zero_is_legal_and_negative_stamp_is_not() {
-        assert_eq!(ok("map", 1, "s").seq, 0);
+        assert_eq!(ok("map", 1, "s").seq(), 0);
         assert!(Header::new("map", 0, -1, "s", Validity::Ok, None).is_err());
     }
 
     #[test]
     fn read_refuses_bool_and_float_seq_and_stamp() {
-        for key in [SEQ, STAMP_NS] {
+        for key in [HEADER_SEQ, STAMP_NS] {
             for bad in [Parameter::Bool(true), Parameter::Float(1.0)] {
                 let mut params = MetadataParameters::new();
                 ok("map", 1, "s").write(&mut params);
@@ -585,7 +723,7 @@ mod tests {
 
     #[test]
     fn read_names_each_missing_key() {
-        for key in [FRAME_ID, SEQ, STAMP_NS, SOURCE, VALIDITY] {
+        for key in [FRAME_ID, HEADER_SEQ, STAMP_NS, SOURCE, VALIDITY] {
             let mut params = MetadataParameters::new();
             ok("map", 1, "s").write(&mut params);
             params.remove(key);
@@ -600,18 +738,39 @@ mod tests {
     #[test]
     fn header_keys_are_the_contract_fields() {
         assert_eq!(
-            [FRAME_ID, SEQ, STAMP_NS, SOURCE, VALIDITY, REASON],
+            [
+                FRAME_ID,
+                HEADER_SEQ,
+                STAMP_NS,
+                SOURCE,
+                VALIDITY,
+                REASON,
+                CHILD_FRAME
+            ],
             [
                 "frame_id",
                 "header_seq",
                 "stamp_ns",
                 "source",
                 "validity",
-                "reason"
+                "reason",
+                "child_frame"
+            ]
+        );
+        assert_eq!(
+            KEYS,
+            [
+                FRAME_ID,
+                HEADER_SEQ,
+                STAMP_NS,
+                SOURCE,
+                VALIDITY,
+                REASON,
+                CHILD_FRAME
             ]
         );
         // `seq` is dora's streaming chunk counter, never the header's.
-        assert_ne!(SEQ, crate::metadata::SEQ);
+        assert_ne!(HEADER_SEQ, crate::metadata::SEQ);
     }
 
     #[test]
@@ -647,7 +806,15 @@ mod tests {
     #[test]
     fn writing_the_header_replaces_shadowing_values() {
         let mut params = MetadataParameters::new();
-        for key in [FRAME_ID, SEQ, STAMP_NS, SOURCE, VALIDITY, REASON] {
+        for key in [
+            FRAME_ID,
+            HEADER_SEQ,
+            STAMP_NS,
+            SOURCE,
+            VALIDITY,
+            REASON,
+            CHILD_FRAME,
+        ] {
             params.insert(key.into(), Parameter::String("hijacked".into()));
         }
         let h = ok("map", 1, "s");
@@ -660,7 +827,7 @@ mod tests {
     fn derive_allows_any_degraded_output() {
         for v in [Validity::Unpaired, Validity::LowConfidence] {
             let out = derive(&[stale()], "a", 0, v, Some("why".into()), None).unwrap();
-            assert_eq!(out.validity, v);
+            assert_eq!(out.validity(), v);
         }
     }
 

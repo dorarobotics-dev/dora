@@ -5,8 +5,10 @@ import pyarrow as pa
 import pytest
 
 from dora import transform as tf
+from dora.header import Header
+from dora_frame_transform import core
 from dora_frame_transform.core import (
-    POSE_MAX_AGE_MS, Header, Pose, cloud_from_arrow, cloud_to_arrow, on_pose, process,
+    POSE_MAX_AGE_MS, Pose, cloud_from_arrow, cloud_to_arrow, on_pose, process,
 )
 
 FIX = Path(__file__).resolve().parents[3] / "libraries/transform/tests/fixtures"
@@ -286,8 +288,9 @@ def test_an_empty_cloud_message_is_a_value_error():
 # --- drop labels: bad_frame only for frame faults ------------------------------
 
 def _on_cloud(ex, value, metadata, target="base_footprint", step=4):
-    return node_main.on_cloud(value, metadata, step=step, extrinsics=ex, target=target,
-                              take=seqs(), pose=None)
+    r = node_main.on_cloud(value, metadata, step=step, extrinsics=ex, target=target,
+                           take=seqs(), pose=None)
+    return r.moved, r.out, r.drops, r.error
 
 
 def test_a_good_cloud_is_published(ex):
@@ -339,3 +342,113 @@ def test_pyproject_declares_dora():
     import tomllib
     meta = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
     assert any(d.replace(" ", "").startswith("dora-rs") for d in meta["project"]["dependencies"])
+
+
+# --- one header: the Rust one ---------------------------------------------------
+
+def test_the_node_uses_the_rust_header():
+    from dora import header as hd
+    assert core.Header is hd.Header
+    assert not hasattr(core, "VALIDITY")
+
+
+def test_the_output_header_is_derived_from_the_input(ex):
+    """derive(): stamp and source come from the parent, frame and seq are the output's."""
+    _, h, _ = process(pts(), hdr(stamp=5, source="lidar"), extrinsics=ex,
+                      target_frame="base_footprint", take_seq=seqs())
+    assert (h.frame_id, h.seq, h.stamp_ns, h.source, h.child_frame) == (
+        "base_footprint", 0, 5, "lidar", None)
+
+
+def test_the_pose_child_frame_is_read_from_its_header(ex):
+    pose = on_pose(pose_arrow(), pose_meta(), ex.frames)
+    assert pose.header.child_frame == "base_footprint"
+    assert pose.transform.src == "base_footprint" and pose.transform.dst == "odom"
+
+
+def test_a_plain_value_error_from_process_is_a_counted_bad_frame(ex, monkeypatch):
+    def boom(*_, **__):
+        raise ValueError("not a FrameError")
+    monkeypatch.setattr(node_main, "process", boom)
+    moved, _, drops, error = _on_cloud(ex, cloud_to_arrow(pts()), hdr().to_metadata())
+    assert moved is None and drops == {"bad_frame": 1} and "not a FrameError" in str(error)
+
+
+def test_on_cloud_reports_the_points_it_read(ex):
+    two = np.zeros((2, 4), dtype="<f4")
+    r = node_main.on_cloud(cloud_to_arrow(two), hdr().to_metadata(), step=4, extrinsics=ex,
+                           target="base_footprint", take=seqs(), pose=None)
+    assert r.items == 2
+    bad = hdr().to_metadata()
+    bad["validity"] = "fine"
+    r = node_main.on_cloud(cloud_to_arrow(two), bad, step=4, extrinsics=ex,
+                           target="base_footprint", take=seqs(), pose=None)
+    assert r.items == 0
+
+
+# --- diag: a full contract header, per-period counts ----------------------------
+
+import json  # noqa: E402
+
+
+def _diag_payload(blob):
+    return json.loads(bytes(blob))
+
+
+def test_diag_carries_a_full_header_of_its_own():
+    d = node_main.Diag("ft", every=2)
+    _, m0 = d.message(out=0, now_ns=123)
+    _, m1 = d.message(out=0, now_ns=456)
+    h0, h1 = Header.from_metadata(m0), Header.from_metadata(m1)
+    assert (h0.frame_id, h0.seq, h0.stamp_ns, h0.source, h0.validity) == ("none", 0, 123, "ft", "ok")
+    assert (h1.seq, h1.stamp_ns) == (1, 456)
+
+
+def test_diag_stamps_now_by_default():
+    import time
+    before = time.time_ns()
+    _, m = node_main.Diag("ft", every=1).message(out=0)
+    assert before <= m["stamp_ns"] <= time.time_ns()
+
+
+def test_diag_counts_items_bytes_and_proc_time_per_period():
+    d = node_main.Diag("ft", every=2)
+    d.observe(items=3, nbytes=48, proc_ns=10, drops={})
+    assert not d.due()
+    d.observe(items=0, nbytes=16, proc_ns=5, drops={"malformed": 1})
+    assert d.due()
+    blob, _ = d.message(out=1, now_ns=1)
+    p = _diag_payload(blob)
+    assert (p["items"], p["bytes"], p["proc_ns"]) == (3, 64, 15)
+    assert (p["in"], p["out"], p["drops"]) == (2, 1, {"malformed": 1})
+    d.observe(items=1, nbytes=16, proc_ns=2, drops={"bad_frame": 1})
+    d.observe(items=1, nbytes=16, proc_ns=2, drops={})
+    p = _diag_payload(d.message(out=2, now_ns=2)[0])
+    assert (p["items"], p["bytes"], p["proc_ns"]) == (2, 32, 4), "per period, not cumulative"
+    assert (p["in"], p["drops"]) == (4, {"malformed": 1, "bad_frame": 1}), "in and drops stay cumulative"
+
+
+def test_diag_counts_a_bad_pose_drop():
+    d = node_main.Diag("ft", every=1)
+    d.drop("bad_pose")
+    assert _diag_payload(d.message(out=0, now_ns=1)[0])["drops"] == {"bad_pose": 1}
+
+
+def test_diag_is_an_arrow_byte_array():
+    blob, _ = node_main.Diag("ft", every=1).message(out=0, now_ns=1)
+    assert blob.type == pa.uint8()
+
+
+def test_node_id_comes_from_the_dora_node_config(monkeypatch):
+    monkeypatch.delenv("NODE_ID", raising=False)
+    monkeypatch.setenv("DORA_NODE_CONFIG", "dataflow_id: 0000\nnode_id: frame_transform\nrun_config: {}\n")
+    assert node_main.node_id() == "frame_transform"
+    monkeypatch.setenv("NODE_ID", "forced")
+    assert node_main.node_id() == "forced"
+
+
+def test_node_id_is_required(monkeypatch):
+    monkeypatch.delenv("NODE_ID", raising=False)
+    monkeypatch.delenv("DORA_NODE_CONFIG", raising=False)
+    with pytest.raises(SystemExit, match="node id"):
+        node_main.node_id()
