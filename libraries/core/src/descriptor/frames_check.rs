@@ -6,6 +6,19 @@
 //! frame resolution as in its `resolve_frame`. The declarations come from
 //! the nodes' `output_frames`/`input_frames` instead of an operators file.
 //!
+//! Check 4 is partial: a route that crosses one dynamic edge needs a wired
+//! pose input, and a pose input whose upstream declares a frame must be in the
+//! edge's parent frame (a pose's `frame_id` is its parent). No descriptor field
+//! declares a pose's `child_frame`, so the child side of the edge is not
+//! checked, and an undeclared pose frame is accepted.
+//!
+//! Each node reports its first failing route only (routes ordered by source
+//! frame, target frame, output port).
+//!
+//! A node's `DORA_FRAMES` and `DORA_EXTRINSICS` must name the files the
+//! dataflow's `frames.dictionary` and `frames.extrinsics` hold, and a node
+//! that changes frames must set both.
+//!
 //! An unknown frame name is reported once, at the producer that declares it.
 //! The reference also reports the route of every consumer of that output; here
 //! a consumer's route check skips an input whose frame is not in the
@@ -25,6 +38,8 @@ use std::path::{Path, PathBuf};
 pub const POSE_TYPE: &str = "std/math/v1/Pose";
 /// The env var a node loads its calibration from.
 pub const EXTRINSICS_ENV: &str = "DORA_EXTRINSICS";
+/// The env var a node loads its frame dictionary from.
+pub const FRAMES_ENV: &str = "DORA_FRAMES";
 
 /// Frames that carry no spatial meaning, so no transform starts or ends there.
 const SPATIALLESS: [&str; 2] = ["any", "none"];
@@ -150,7 +165,7 @@ fn upstream<'n>(node: &'n Node, input: &str) -> Option<&'n UserInputMapping> {
 
 /// Run the frame checks. A dataflow without a `frames:` key has none.
 /// `base_dir` is the dataflow file's directory; `frames:` paths resolve
-/// against it, and a node's relative `DORA_EXTRINSICS` against the directory
+/// against it, and a node's relative `DORA_FRAMES`/`DORA_EXTRINSICS` against the directory
 /// the node is launched from (see [`launch_dir`]).
 pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolation> {
     let Some(cfg) = &dataflow.frames else {
@@ -166,7 +181,8 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
         });
     };
 
-    let frames = match FrameDict::load(&base_dir.join(&cfg.dictionary)) {
+    let dict_path = base_dir.join(&cfg.dictionary);
+    let frames = match FrameDict::load(&dict_path) {
         Ok(f) => f,
         Err(e) => {
             push("transform", "-", "frames.dictionary", e.to_string());
@@ -308,67 +324,107 @@ pub fn check_frames(dataflow: &Descriptor, base_dir: &Path) -> Vec<FrameViolatio
         }
 
         if let Some(ex) = &extrinsics {
+            // The first failing route per node is reported.
             for (src, dst, port) in &changes {
-                match ex.route(src, dst) {
-                    Ok(_) => {}
+                let failure = match ex.route(src, dst) {
+                    Ok(_) => None,
                     Err(FrameError::DynamicEdge { message, edges }) => {
-                        let wired_pose = node
-                            .inputs
-                            .keys()
-                            .any(|k| is_pose(k.as_str()) && upstream(node, k.as_str()).is_some());
                         if edges.len() > 1 {
                             // The node composes with one pose, standing in for
                             // one dynamic edge; a second would drop every
                             // message at runtime.
-                            push(
-                                "transform",
-                                &nid,
-                                port,
-                                format!(
-                                    "'{src}' -> '{dst}' crosses {} dynamic edges; one pose input covers one",
-                                    edges.len()
-                                ),
-                            );
-                        } else if !wired_pose {
-                            push(
-                                "transform",
-                                &nid,
-                                port,
-                                format!(
-                                    "{message}; node '{nid}' has no wired {POSE_TYPE} input to compose with"
-                                ),
-                            );
+                            Some(format!(
+                                "'{src}' -> '{dst}' crosses {} dynamic edges; one pose input covers one",
+                                edges.len()
+                            ))
+                        } else {
+                            let (child, parent) = &edges[0];
+                            pose_violation(&ctx, node, &message, (src, dst), (parent, child))
                         }
                     }
-                    Err(e) => push("transform", &nid, port, e.to_string()),
+                    Err(e) => Some(e.to_string()),
+                };
+                if let Some(message) = failure {
+                    push("transform", &nid, port, message);
+                    break;
                 }
             }
         }
 
-        match ctx.env(node, EXTRINSICS_ENV) {
-            Some(named) => {
-                if let Some(message) = calibration_violation(node, &named, base_dir, &ex_path) {
-                    push("transform", &nid, EXTRINSICS_ENV, message);
+        // The files the node loads must be the ones validated here.
+        let pinned = [
+            (FRAMES_ENV, &dict_path, "frame dictionary"),
+            (EXTRINSICS_ENV, &ex_path, "calibration"),
+        ];
+        for (var, checked, what) in pinned {
+            match ctx.env(node, var) {
+                Some(named) => {
+                    if let Some(message) = pin_violation(node, var, what, &named, base_dir, checked)
+                    {
+                        push("transform", &nid, var, message);
+                    }
                 }
-            }
-            None if !changes.is_empty() => push(
-                "transform",
-                &nid,
-                EXTRINSICS_ENV,
-                format!(
-                    "changes frames but sets no {EXTRINSICS_ENV}, so the node cannot load a calibration"
+                None if !changes.is_empty() => push(
+                    "transform",
+                    &nid,
+                    var,
+                    format!("changes frames but sets no {var}, so the node cannot load a {what}"),
                 ),
-            ),
-            None => {}
+                None => {}
+            }
         }
     }
     out
 }
 
-/// Why the calibration `named` (the node's `DORA_EXTRINSICS`) is not the
-/// one at `checked_path` that the dataflow was validated against, if so.
-fn calibration_violation(
+/// Why `node`'s wired pose inputs cannot cover the dynamic edge
+/// `parent -> child` that `message` reports, if so. A pose input covers it
+/// when its upstream output's frame is `parent` or is undeclared (`any`,
+/// unresolvable here): the pose's `child_frame` has no descriptor field, so
+/// only its parent frame is checked.
+fn pose_violation(
+    ctx: &Ctx<'_>,
     node: &Node,
+    message: &str,
+    (src, dst): (&str, &str),
+    (parent, child): (&str, &str),
+) -> Option<String> {
+    let nid = node.id.to_string();
+    let mut wrong = Vec::new();
+    for port in node.inputs.keys() {
+        let p = port.as_str();
+        if ctx.port_type(node, p) != Some(POSE_TYPE) {
+            continue;
+        }
+        let Some(up) = upstream(node, p) else {
+            continue;
+        };
+        match ctx.resolve(up.source.as_ref(), up.output.as_str()) {
+            Ok(frame) if frame != "any" && frame != parent => {
+                wrong.push(format!(
+                    "pose input '{p}' ({}/{}) is in '{frame}'",
+                    up.source, up.output
+                ));
+            }
+            _ => return None,
+        }
+    }
+    if wrong.is_empty() {
+        return Some(format!(
+            "{message}; node '{nid}' has no wired {POSE_TYPE} input to compose with"
+        ));
+    }
+    Some(format!(
+        "'{src}' -> '{dst}' crosses the dynamic edge '{parent}' -> '{child}', but {}; a pose covering that edge is in '{parent}'",
+        wrong.join(", ")
+    ))
+}
+/// Why the file `named` by the node's `var` (its `what`) is not the one at
+/// `checked_path` that the dataflow was validated against, if so.
+fn pin_violation(
+    node: &Node,
+    var: &str,
+    what: &str,
     named: &str,
     base_dir: &Path,
     checked_path: &Path,
@@ -376,7 +432,7 @@ fn calibration_violation(
     let named_path = Path::new(named);
     if named_path.is_relative() && node.git.is_some() {
         return Some(format!(
-            "{EXTRINSICS_ENV} '{named}' is relative and the node runs from its git checkout, so the calibration cannot be checked before launch; use an absolute path"
+            "{var} '{named}' is relative and the node runs from its git checkout, so the {what} cannot be checked before launch; use an absolute path"
         ));
     }
     let launched = resolve_path(&launch_dir(node, base_dir).join(named_path));
@@ -386,7 +442,7 @@ fn calibration_violation(
     let checked = resolve_path(checked_path);
     if launched != checked {
         return Some(format!(
-            "launches with {} but was validated against {}; a robot must run the calibration it was checked with",
+            "launches with {} but was validated against {}; a robot must run the {what} it was checked with",
             launched.display(),
             checked.display()
         ));

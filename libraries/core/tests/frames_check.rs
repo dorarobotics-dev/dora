@@ -37,7 +37,7 @@ fn transform_node(target: &str, with_pose: bool, extrinsics: &str) -> String {
     input_frames: {{cloud: any}}
     outputs: [cloud]
     output_frames: {{cloud: env:TARGET_FRAME}}
-    env: {{TARGET_FRAME: {target}, DORA_EXTRINSICS: {extrinsics}}}
+    env: {{TARGET_FRAME: {target}, DORA_FRAMES: frames.yml, DORA_EXTRINSICS: {extrinsics}}}
 "#
     )
 }
@@ -271,10 +271,11 @@ fn base() -> String {
 
 #[test]
 fn extrinsics_resolve_against_deploy_working_dir() {
+    let frames = format!("DORA_FRAMES: {}/frames.yml", base());
     let with_wd = |extrinsics: &str, wd: &str| {
         format!(
             "{HEAD}{SIM}{}    deploy: {{working_dir: {wd}}}\n",
-            transform_node("odom", true, extrinsics)
+            transform_node("odom", true, extrinsics).replace("DORA_FRAMES: frames.yml", &frames)
         )
     };
     // The node runs from <dataflow dir>/sub, so ../extrinsics.yml is the checked file.
@@ -291,10 +292,11 @@ fn extrinsics_resolve_against_deploy_working_dir() {
 
 #[test]
 fn git_node_with_relative_extrinsics_cannot_be_checked() {
+    let frames = format!("DORA_FRAMES: {}/frames.yml", base());
     let git = |extrinsics: &str| {
         format!(
             "{HEAD}{SIM}{}    git: https://example.com/ft.git\n",
-            transform_node("odom", true, extrinsics)
+            transform_node("odom", true, extrinsics).replace("DORA_FRAMES: frames.yml", &frames)
         )
     };
     let v = run(&git("extrinsics.yml"));
@@ -505,7 +507,7 @@ fn same_as_follows_a_three_hop_chain_and_a_literal_stops_it() {
     );
 
     // A literal output ends the chain: what comes after is in its frame.
-    let lit = "\n  - id: tf\n    path: t.py\n    inputs: {cloud: r3/cloud}\n    outputs: [cloud]\n    output_frames: {cloud: base_link}\n    env: {DORA_EXTRINSICS: extrinsics.yml}\n";
+    let lit = "\n  - id: tf\n    path: t.py\n    inputs: {cloud: r3/cloud}\n    outputs: [cloud]\n    output_frames: {cloud: base_link}\n    env: {DORA_FRAMES: frames.yml, DORA_EXTRINSICS: extrinsics.yml}\n";
     let after = relay("r4", "tf");
     assert!(
         run(&format!(
@@ -567,4 +569,205 @@ fn a_value_less_env_entry_is_refused_not_read_as_none() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("env"), "{err}");
+}
+
+// Check 4, partly: the wired pose input covers the dynamic edge.
+
+#[test]
+fn a_pose_in_the_dynamic_edges_parent_frame_is_accepted() {
+    // rslidar -> odom crosses odom -> base_footprint; sim/odom_pose is in odom.
+    let v = run(&format!(
+        "{HEAD}{SIM}{}",
+        transform_node("odom", true, "extrinsics.yml")
+    ));
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn a_pose_in_another_frame_than_the_dynamic_edges_parent_is_refused() {
+    // A camera pose in `map` cannot stand in for odom -> base_footprint.
+    let sim = SIM.replace("odom_pose: odom}", "odom_pose: map}");
+    let v = run(&format!(
+        "{HEAD}{sim}{}",
+        transform_node("odom", true, "extrinsics.yml")
+    ));
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(
+        v[0].starts_with("transform:ft:cloud")
+            && v[0].contains("'odom' -> 'base_footprint'")
+            && v[0].contains("pose input 'pose' (sim/odom_pose) is in 'map'"),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn a_pose_frame_resolved_through_same_as_is_checked() {
+    let relay = "\n  - id: relay\n    path: r.py\n    inputs: {pose: sim/odom_pose}\n    outputs: [pose]\n    output_types: {pose: std/math/v1/Pose}\n    output_frames: {pose: same_as:pose}\n";
+    let ft = transform_node("odom", true, "extrinsics.yml")
+        .replace("pose: sim/odom_pose", "pose: relay/pose");
+    assert!(run(&format!("{HEAD}{SIM}{relay}{ft}")).is_empty());
+    let sim = SIM.replace("odom_pose: odom}", "odom_pose: map}");
+    let v = run(&format!("{HEAD}{sim}{relay}{ft}"));
+    assert!(
+        v.iter()
+            .any(|m| m.contains("pose input 'pose' (relay/pose) is in 'map'")),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn a_pose_with_no_declared_frame_is_accepted() {
+    // No descriptor field declares a pose's frame or child_frame, so an
+    // undeclared one cannot be checked before launch.
+    let sim = SIM.replace(", odom_pose: odom}", "}");
+    let v = run(&format!(
+        "{HEAD}{sim}{}",
+        transform_node("odom", true, "extrinsics.yml")
+    ));
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn one_matching_pose_input_covers_the_edge() {
+    let sim = SIM
+        .replace(
+            "outputs: [cloud, odom_pose]",
+            "outputs: [cloud, odom_pose, map_pose]",
+        )
+        .replace(
+            "odom_pose: std/math/v1/Pose}",
+            "odom_pose: std/math/v1/Pose, map_pose: std/math/v1/Pose}",
+        )
+        .replace("odom_pose: odom}", "odom_pose: odom, map_pose: map}");
+    let ft = transform_node("odom", true, "extrinsics.yml").replace(
+        "      pose: sim/odom_pose\n",
+        "      pose: sim/odom_pose\n      pose2: sim/map_pose\n",
+    );
+    assert!(run(&format!("{HEAD}{sim}{ft}")).is_empty());
+}
+
+// Route reporting: the first failing route per node.
+
+#[test]
+fn only_the_first_failing_route_of_a_node_is_reported() {
+    let ft = transform_node("odom", false, "extrinsics.yml")
+        .replace("outputs: [cloud]", "outputs: [cloud, cloud2]")
+        .replace(
+            "output_frames: {cloud: env:TARGET_FRAME}",
+            "output_frames: {cloud: env:TARGET_FRAME, cloud2: map}",
+        );
+    let v = run(&format!("{HEAD}{SIM}{ft}"));
+    let routes: Vec<_> = v
+        .iter()
+        .filter(|m| m.starts_with("transform:ft:cloud"))
+        .collect();
+    assert_eq!(routes.len(), 1, "{v:?}");
+    // Another node still gets its own report.
+    let ft2 = transform_node("odom", false, "extrinsics.yml").replace("id: ft", "id: ft2");
+    let v = run(&format!("{HEAD}{SIM}{ft}{ft2}"));
+    assert_eq!(
+        v.iter()
+            .filter(|m| m.starts_with("transform:ft2:cloud"))
+            .count(),
+        1,
+        "{v:?}"
+    );
+}
+
+// DORA_FRAMES is pinned to frames.dictionary as DORA_EXTRINSICS is to frames.extrinsics.
+
+#[test]
+fn launch_dictionary_must_match_checked_one() {
+    let ft = transform_node("odom", true, "extrinsics.yml")
+        .replace("DORA_FRAMES: frames.yml", "DORA_FRAMES: extrinsics.yml");
+    let v = run(&format!("{HEAD}{SIM}{ft}"));
+    assert!(
+        v.iter().any(|m| m.starts_with("transform:ft:DORA_FRAMES")
+            && m.contains("a robot must run the frame dictionary it was checked with")),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn launch_dictionary_that_does_not_exist() {
+    let ft = transform_node("odom", true, "extrinsics.yml")
+        .replace("DORA_FRAMES: frames.yml", "DORA_FRAMES: other.yml");
+    let v = run(&format!("{HEAD}{SIM}{ft}"));
+    assert!(
+        v.iter().any(|m| m.starts_with("transform:ft:DORA_FRAMES")
+            && m.ends_with("frames_check/other.yml does not exist")),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn frame_change_without_frames_env() {
+    let ft =
+        transform_node("odom", true, "extrinsics.yml").replace("DORA_FRAMES: frames.yml, ", "");
+    let v = run(&format!("{HEAD}{SIM}{ft}"));
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert!(
+        v[0].starts_with("transform:ft:DORA_FRAMES") && v[0].contains("sets no DORA_FRAMES"),
+        "{v:?}"
+    );
+    // The dataflow-level env reaches the node.
+    let yaml = format!("env: {{DORA_FRAMES: frames.yml}}\n{HEAD}{SIM}{ft}");
+    assert!(run(&yaml).is_empty());
+    // An empty node value overrides it.
+    let empty = transform_node("odom", true, "extrinsics.yml")
+        .replace("DORA_FRAMES: frames.yml", "DORA_FRAMES: \"\"");
+    let v = run(&format!(
+        "env: {{DORA_FRAMES: frames.yml}}\n{HEAD}{SIM}{empty}"
+    ));
+    assert!(v.iter().any(|m| m.contains("sets no DORA_FRAMES")), "{v:?}");
+}
+
+#[test]
+fn dictionary_resolves_against_deploy_working_dir() {
+    let with_wd = |frames: &str, wd: &str| {
+        format!(
+            "{HEAD}{SIM}{}    deploy: {{working_dir: {wd}}}\n",
+            transform_node("odom", true, "../extrinsics.yml")
+                .replace("DORA_FRAMES: frames.yml", &format!("DORA_FRAMES: {frames}"))
+        )
+    };
+    assert!(run(&with_wd("../frames.yml", "sub")).is_empty());
+    let v = run(&with_wd("frames.yml", "sub"));
+    assert!(
+        v.iter().any(|m| m.starts_with("transform:ft:DORA_FRAMES")
+            && m.ends_with("frames_check/sub/frames.yml does not exist")),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn git_node_with_relative_dictionary_cannot_be_checked() {
+    let absolute_ex = format!("{}/extrinsics.yml", base());
+    let git = |frames: &str| {
+        format!(
+            "{HEAD}{SIM}{}    git: https://example.com/ft.git\n",
+            transform_node("odom", true, &absolute_ex)
+                .replace("DORA_FRAMES: frames.yml", &format!("DORA_FRAMES: {frames}"))
+        )
+    };
+    let v = run(&git("frames.yml"));
+    assert!(
+        v.iter().any(|m| m.starts_with("transform:ft:DORA_FRAMES")
+            && m.contains("DORA_FRAMES 'frames.yml' is relative")
+            && m.contains("use an absolute path")),
+        "{v:?}"
+    );
+    assert!(run(&git(&format!("{}/frames.yml", base()))).is_empty());
+}
+
+#[test]
+fn dictionary_paths_are_not_trimmed() {
+    let ft = transform_node("odom", true, "extrinsics.yml")
+        .replace("DORA_FRAMES: frames.yml", "DORA_FRAMES: \" frames.yml\"");
+    let v = run(&format!("{HEAD}{SIM}{ft}"));
+    assert!(
+        v.iter().any(|m| m.starts_with("transform:ft:DORA_FRAMES")
+            && m.ends_with("frames_check/ frames.yml does not exist")),
+        "{v:?}"
+    );
 }

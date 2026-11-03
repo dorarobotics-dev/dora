@@ -41,9 +41,13 @@ MUTATIONS = [
     ("14. a cloud composed with a stale pose is forwarded as ok", FT,
      '        return "stale", "stale_pose"', "        return \"ok\", None"),
     ("15. the validator skips the transform check", "libraries/core/src/descriptor/frames_check.rs",
-     "                match ex.route(src, dst) {", "                match Ok::<(), FrameError>(()) {"),
+     "                let failure = match ex.route(src, dst) {", "                let failure = match Ok::<(), FrameError>(()) {"),
     ("16. a node may launch with a different calibration than was checked", "libraries/core/src/descriptor/frames_check.rs",
      "    if launched != checked {", "    if false && launched != checked {"),
+    ("F1. a node may launch with a different frame dictionary than was checked", "libraries/core/src/descriptor/frames_check.rs",
+     "            (FRAMES_ENV, &dict_path, \"frame dictionary\"),\n", ""),
+    ("P1. a pose in another frame than the dynamic edge's parent covers it", "libraries/core/src/descriptor/frames_check.rs",
+     "            Ok(frame) if frame != \"any\" && frame != parent => {", "            Ok(frame) if false && frame != \"any\" && frame != parent => {"),
 ]
 
 SUITES = [
