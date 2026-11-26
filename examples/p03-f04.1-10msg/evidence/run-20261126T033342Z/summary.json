@@ -1,0 +1,31 @@
+{
+  "run_id": "20261126T033342Z",
+  "timestamp_utc": "2026-11-26T03:33:42Z",
+  "command": "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/target/debug/dora run dataflow.yml --stop-after 10s",
+  "dataflow": "dataflow.yml",
+  "nodes": [
+    "sender",
+    "counter"
+  ],
+  "dora_version": "dora-cli 1.1.0",
+  "dora_bin": "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/target/debug/dora",
+  "dora_bin_sha256": "f079ca1a266c883d2c79a3c0a245feb0dfa30ebfb169f3f7b294d7d583cb3071",
+  "git_commit": "db6fe52",
+  "expected": 10,
+  "sent": 10,
+  "received": 10,
+  "sequence_ok": true,
+  "verdict": "pass",
+  "dora_exit_code": 0,
+  "build_seconds": 1,
+  "run_seconds": 11,
+  "host": "Darwin arm64 25.5.0",
+  "python_executable": "/Users/echo/.local/bin/python3",
+  "evidence": {
+    "stdout": "stdout.log",
+    "build": "build.log",
+    "dataflow_copy": "dataflow.yml",
+    "commands": "commands.md",
+    "extraction": "extract.md"
+  }
+}

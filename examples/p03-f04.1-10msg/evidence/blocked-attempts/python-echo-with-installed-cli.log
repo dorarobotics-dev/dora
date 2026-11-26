@@ -1,0 +1,40 @@
+checker: DEBUG    building node
+echo: DEBUG    building node
+sender: DEBUG    building node
+2026-11-26T03:24:34.601894Z  WARN zenoh::net::runtime::orchestrator: Unable to connect to any locator of scouted peer 54054409df1e3cb4bbc8ec181a0328c7: [tcp/127.0.0.1:33343]
+2026-11-26T03:24:34.654033Z  WARN zenoh::net::runtime::orchestrator: Unable to connect to any locator of scouted peer 54054409df1e3cb4bbc8ec181a0328c7: [tcp/127.0.0.1:33343]
+11:24:34 DEBUG   checker: daemon::spawner  spawning node
+11:24:34 DEBUG   echo: daemon::spawner  spawning node
+11:24:34 DEBUG   sender: daemon::spawner  spawning node
+11:24:35 INFO    checker: spawner  spawning: "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.venv-f041/bin/python3" -u /Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/python-echo/checker.py
+11:24:35 INFO    echo: spawner  spawning: "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.venv-f041/bin/python3" -u /Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/python-echo/echo.py
+11:24:35 INFO    sender: spawner  spawning: "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.venv-f041/bin/python3" -u /Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/python-echo/sender.py
+
+11:24:35 INFO    [dora]: dora daemon  finished building nodes, spawning...
+
+11:24:35 INFO    checker: spawner  spawning `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.venv-f041/bin/python3` in `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/python-echo`
+11:24:35 DEBUG   checker: spawner  spawned node with pid 83090
+11:24:35 INFO    echo: spawner  spawning `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.venv-f041/bin/python3` in `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/python-echo`
+11:24:35 DEBUG   echo: spawner  spawned node with pid 83091
+11:24:35 INFO    sender: spawner  spawning `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.venv-f041/bin/python3` in `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/python-echo`
+11:24:35 DEBUG   sender: spawner  spawned node with pid 83092
+2026-11-26T03:24:35.502725Z  WARN zenoh::net::runtime::orchestrator: Unable to connect to any locator of scouted peer 54054409df1e3cb4bbc8ec181a0328c7: [tcp/127.0.0.1:33343]
+11:24:35 INFO    echo: daemon  node is ready
+11:24:35 INFO    checker: daemon  node is ready
+11:24:35 INFO    sender: daemon  node is ready
+11:24:35 INFO    [dora]: daemon  all nodes are ready, starting dataflow
+11:24:35 stdout  checker:  Total PASS: 0
+11:24:35 stdout  echo:  
+11:24:35 stdout  echo:  
+11:24:35 DEBUG   echo: daemon  handling node stop with exit status Success (restart: false, restart_count: 0)
+11:24:35 INFO    echo: daemon  echo finished successfully
+11:24:35 stdout  checker:  
+11:24:35 stdout  checker:  
+11:24:35 DEBUG   checker: daemon  handling node stop with exit status Success (restart: false, restart_count: 0)
+11:24:35 INFO    checker: daemon  checker finished successfully
+11:24:35 stdout  sender:  
+11:24:35 stdout  sender:  
+11:24:35 DEBUG   sender: daemon  handling node stop with exit status Success (restart: false, restart_count: 0)
+11:24:35 INFO    sender: daemon  sender finished successfully
+11:24:35 INFO    [dora]: daemon  dataflow finished on machine `01a215e2-2f20-7d51-b93a-b62529b40eb6`
+2026-11-26T03:24:35.749994Z  INFO run_inner: dora_daemon: exiting daemon because all required dataflows are finished health_check_interval_duration=None self.daemon_id=DaemonId { machine_id: None, uuid: 01a215e2-2f20-7d51-b93a-b62529b40eb6 }

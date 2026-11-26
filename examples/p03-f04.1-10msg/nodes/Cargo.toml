@@ -1,0 +1,25 @@
+[package]
+name = "p03-f04-1-nodes"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "F-04.1 acceptance example nodes: 10-message sender and counter"
+
+# Standalone workspace: this example must be self-contained and must not change
+# dora's own build configuration (no edit to the root workspace `members`).
+[workspace]
+
+[[bin]]
+name = "sender"
+path = "src/bin/sender.rs"
+
+[[bin]]
+name = "counter"
+path = "src/bin/counter.rs"
+
+[dependencies]
+# Same crate and feature set as the in-repo Rust examples
+# (see examples/rust-dataflow/node/Cargo.toml), pinned to the dora-node-api in
+# this checkout so the node protocol matches the dora CLI built from it.
+dora-node-api = { path = "../../../apis/rust/node", features = ["arrow-v59", "tracing", "metrics"] }
+eyre = "0.6"

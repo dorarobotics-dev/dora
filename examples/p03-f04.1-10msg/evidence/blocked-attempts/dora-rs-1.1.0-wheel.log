@@ -1,0 +1,85 @@
+probe: DEBUG    building node
+2026-11-26T03:26:40.212939Z  WARN zenoh::net::runtime::orchestrator: Unable to connect to any locator of scouted peer 54054409df1e3cb4bbc8ec181a0328c7: [tcp/127.0.0.1:33343]
+11:26:40 DEBUG   probe: daemon::spawner  spawning node
+11:26:40 INFO    probe: spawner  spawning: "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.venv-f041-110/bin/python3" -u /Volumes/EchoMacData/Dev/Dora/DoRobot-org/.scratch-f041/probe.py
+
+11:26:40 INFO    [dora]: dora daemon  finished building nodes, spawning...
+
+11:26:40 INFO    probe: spawner  spawning `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.venv-f041-110/bin/python3` in `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.scratch-f041`
+11:26:40 DEBUG   probe: spawner  spawned node with pid 83829
+11:26:40 stdout  probe:  DORA_VERSION 1.1.0
+2026-11-26T03:26:41.178510Z  INFO dora_daemon::node_communication: failed to receive register message
+
+Caused by:
+   0: failed to deserialize DaemonRequest
+   1: invalid value: integer `2717978624`, expected variant index 0 <= i < 12
+
+Location:
+    binaries/daemon/src/node_communication/tcp.rs:85:14
+2026-11-26T03:26:41.178643Z  INFO dora_daemon::node_communication: channel disconnected before register message
+11:26:41 stdout  probe:  Traceback (most recent call last):
+11:26:41 stdout  probe:    File "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.scratch-f041/probe.py", line 4, in <module>
+11:26:41 stdout  probe:      node = Node()
+11:26:41 stdout  probe:             ^^^^^^
+11:26:41 stdout  probe:  RuntimeError: Could not initiate node from environment variable. For dynamic node, please add a node id in the initialization function.
+11:26:41 stdout  probe:  
+11:26:41 stdout  probe:  Caused by:
+11:26:41 stdout  probe:     0: internal error
+11:26:41 stdout  probe:     1: failed to init event stream
+11:26:41 stdout  probe:     2: failed to send register request to dora-daemon
+11:26:41 stdout  probe:     3: server disconnected unexpectedly
+11:26:41 stdout  probe:  
+11:26:41 stdout  probe:  Location:
+11:26:41 stdout  probe:      apis/python/node/src/lib.rs:192:39
+11:26:41 stdout  probe:  
+11:26:41 stdout  probe:  
+2026-11-26T03:26:41.182102Z ERROR node_failure: dora_daemon::spawn::prepared: node exited with error: ExitCode(1) node_id=probe dataflow_id=01a215e4-19fc-7ea8-b25e-17bd92d4d55f
+11:26:41 DEBUG   probe: daemon  handling node stop with exit status ExitCode(1) (restart: false, restart_count: 0)
+11:26:41 ERROR   probe: daemon  exited with code 1 with stderr output:
+---------------------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.scratch-f041/probe.py", line 4, in <module>
+    node = Node()
+           ^^^^^^
+RuntimeError: Could not initiate node from environment variable. For dynamic node, please add a node id in the initialization function.
+
+Caused by:
+   0: internal error
+   1: failed to init event stream
+   2: failed to send register request to dora-daemon
+   3: server disconnected unexpectedly
+
+Location:
+    apis/python/node/src/lib.rs:192:39
+---------------------------------------------------------------------------------
+
+11:26:41 WARN    probe: daemon::pending  node exited before initializing dora connection
+11:26:41 INFO    [dora]: daemon  dataflow finished on machine `01a215e4-19fc-7fe2-8afb-c2b69b3af9c4`
+2026-11-26T03:26:41.182258Z  INFO run_inner: dora_daemon: exiting daemon because all required dataflows are finished health_check_interval_duration=None self.daemon_id=DaemonId { machine_id: None, uuid: 01a215e4-19fc-7fe2-8afb-c2b69b3af9c4 }
+
+
+[ERROR]
+Dataflow failed:
+
+Node `probe` failed: exited with code 1 with stderr output:
+---------------------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/EchoMacData/Dev/Dora/DoRobot-org/.scratch-f041/probe.py", line 4, in <module>
+    node = Node()
+           ^^^^^^
+RuntimeError: Could not initiate node from environment variable. For dynamic node, please add a node id in the initialization function.
+
+Caused by:
+   0: internal error
+   1: failed to init event stream
+   2: failed to send register request to dora-daemon
+   3: server disconnected unexpectedly
+
+Location:
+    apis/python/node/src/lib.rs:192:39
+---------------------------------------------------------------------------------
+
+
+
+Location:
+    binaries/cli/src/common.rs:47:17
