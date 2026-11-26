@@ -1,0 +1,32 @@
+# F-04.1 acceptance dataflow: two nodes, one launch configuration.
+#
+#   dora/timer/millis/100  ->  sender  --message-->  counter
+#
+# `sender` emits exactly SEND_TOTAL (10) sample messages, one per timer tick.
+# `counter` receives them, counts them and verifies the sequence is 1..10.
+#
+# Both nodes are Rust binaries built from `nodes/` against the `dora-node-api`
+# crate in this checkout (same crate and features as
+# `examples/rust-dataflow/node`), so the node protocol always matches the CLI
+# built from the same source tree.
+#
+# Run with (see run.sh for the evidence-capturing wrapper):
+#   dora run dataflow.yml --stop-after 10s
+nodes:
+  - id: sender
+    build: cargo build --manifest-path nodes/Cargo.toml --bins
+    path: nodes/target/debug/sender
+    inputs:
+      tick: dora/timer/millis/100
+    outputs:
+      - message
+    env:
+      SEND_TOTAL: "10"
+
+  - id: counter
+    build: cargo build --manifest-path nodes/Cargo.toml --bins
+    path: nodes/target/debug/counter
+    inputs:
+      message: sender/message
+    env:
+      EXPECT_TOTAL: "10"

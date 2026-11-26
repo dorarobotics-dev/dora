@@ -1,0 +1,126 @@
+counter: DEBUG    building node
+counter: INFO     running build command: `cargo build --manifest-path nodes/Cargo.toml --bins` in /Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg
+counter: stdout       Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
+sender: DEBUG    building node
+sender: INFO     running build command: `cargo build --manifest-path nodes/Cargo.toml --bins` in /Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg
+sender: stdout       Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+2026-11-26T03:29:31.007389Z  WARN zenoh::net::runtime::orchestrator: Unable to connect to any locator of scouted peer 54054409df1e3cb4bbc8ec181a0328c7: [tcp/127.0.0.1:33343]
+11:29:31 DEBUG   counter: daemon::spawner  spawning node
+11:29:31 DEBUG   sender: daemon::spawner  spawning node
+
+11:29:31 INFO    [dora]: dora daemon  finished building nodes, spawning...
+
+11:29:31 INFO    counter: spawner  spawning `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg/nodes/target/debug/counter` in `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg`
+11:29:31 DEBUG   counter: spawner  spawned node with pid 86620
+11:29:31 INFO    sender: spawner  spawning `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg/nodes/target/debug/sender` in `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg`
+11:29:31 DEBUG   sender: spawner  spawned node with pid 86621
+2026-11-26T03:29:32.025229Z  WARN zenoh::net::runtime::orchestrator: Unable to connect to any locator of scouted peer 54054409df1e3cb4bbc8ec181a0328c7: [tcp/127.0.0.1:33343]
+2026-11-26T03:29:33.999395Z  INFO dora_daemon::node_communication: failed to receive register message
+
+Caused by:
+   0: failed to deserialize DaemonRequest
+   1: invalid value: integer `2717978624`, expected variant index 0 <= i < 12
+
+Location:
+    binaries/daemon/src/node_communication/tcp.rs:85:14
+2026-11-26T03:29:34.000197Z  INFO dora_daemon::node_communication: channel disconnected before register message
+11:29:34 stdout  sender:  Error: internal error
+11:29:34 stdout  sender:  
+11:29:34 stdout  sender:  Caused by:
+11:29:34 stdout  sender:     0: failed to init event stream
+11:29:34 stdout  sender:     1: failed to send register request to dora-daemon
+11:29:34 stdout  sender:     2: server disconnected unexpectedly
+11:29:34 stdout  sender:  
+11:29:34 stdout  sender:  Location:
+11:29:34 stdout  sender:      src/bin/sender.rs:14:34
+11:29:34 stdout  sender:  
+11:29:34 stdout  sender:  
+2026-11-26T03:29:34.005316Z ERROR node_failure: dora_daemon::spawn::prepared: node exited with error: ExitCode(1) node_id=sender dataflow_id=01a215e6-b4fd-7dbc-9ebc-ddd8b92bff18
+11:29:34 DEBUG   sender: daemon  handling node stop with exit status ExitCode(1) (restart: false, restart_count: 0)
+11:29:34 ERROR   sender: daemon  exited with code 1 with stderr output:
+---------------------------------------------------------------------------------
+Error: internal error
+
+Caused by:
+   0: failed to init event stream
+   1: failed to send register request to dora-daemon
+   2: server disconnected unexpectedly
+
+Location:
+    src/bin/sender.rs:14:34
+---------------------------------------------------------------------------------
+
+11:29:34 WARN    sender: daemon::pending  node exited before initializing dora connection
+2026-11-26T03:29:36.002375Z  INFO dora_daemon::node_communication: failed to receive register message
+
+Caused by:
+   0: failed to deserialize DaemonRequest
+   1: invalid value: integer `2717978624`, expected variant index 0 <= i < 12
+
+Location:
+    binaries/daemon/src/node_communication/tcp.rs:85:14
+2026-11-26T03:29:36.002706Z  INFO dora_daemon::node_communication: channel disconnected before register message
+11:29:36 stdout  counter:  Error: internal error
+11:29:36 stdout  counter:  
+11:29:36 stdout  counter:  Caused by:
+11:29:36 stdout  counter:     0: failed to init event stream
+11:29:36 stdout  counter:     1: failed to send register request to dora-daemon
+11:29:36 stdout  counter:     2: server disconnected unexpectedly
+11:29:36 stdout  counter:  
+11:29:36 stdout  counter:  Location:
+11:29:36 stdout  counter:      src/bin/counter.rs:19:31
+11:29:36 stdout  counter:  
+11:29:36 stdout  counter:  
+2026-11-26T03:29:36.007629Z ERROR node_failure: dora_daemon::spawn::prepared: node exited with error: ExitCode(1) node_id=counter dataflow_id=01a215e6-b4fd-7dbc-9ebc-ddd8b92bff18
+11:29:36 DEBUG   counter: daemon  handling node stop with exit status ExitCode(1) (restart: false, restart_count: 0)
+11:29:36 ERROR   counter: daemon  exited with code 1 with stderr output:
+---------------------------------------------------------------------------------
+Error: internal error
+
+Caused by:
+   0: failed to init event stream
+   1: failed to send register request to dora-daemon
+   2: server disconnected unexpectedly
+
+Location:
+    src/bin/counter.rs:19:31
+---------------------------------------------------------------------------------
+
+11:29:36 WARN    counter: daemon::pending  node exited before initializing dora connection
+11:29:36 INFO    [dora]: daemon  dataflow finished on machine `01a215e6-b4ff-7c11-b737-fa6fd8d4858b`
+2026-11-26T03:29:36.007819Z  INFO run_inner: dora_daemon: exiting daemon because all required dataflows are finished health_check_interval_duration=None self.daemon_id=DaemonId { machine_id: None, uuid: 01a215e6-b4ff-7c11-b737-fa6fd8d4858b }
+
+
+[ERROR]
+Dataflow failed:
+
+Node `sender` failed: exited with code 1 with stderr output:
+---------------------------------------------------------------------------------
+Error: internal error
+
+Caused by:
+   0: failed to init event stream
+   1: failed to send register request to dora-daemon
+   2: server disconnected unexpectedly
+
+Location:
+    src/bin/sender.rs:14:34
+---------------------------------------------------------------------------------
+
+Node `counter` failed: exited with code 1 with stderr output:
+---------------------------------------------------------------------------------
+Error: internal error
+
+Caused by:
+   0: failed to init event stream
+   1: failed to send register request to dora-daemon
+   2: server disconnected unexpectedly
+
+Location:
+    src/bin/counter.rs:19:31
+---------------------------------------------------------------------------------
+
+
+
+Location:
+    binaries/cli/src/common.rs:47:17

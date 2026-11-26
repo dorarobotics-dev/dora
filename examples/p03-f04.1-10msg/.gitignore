@@ -1,0 +1,9 @@
+# Build artifacts / local outputs
+nodes/target/
+nodes/Cargo.lock
+out/
+__pycache__/
+
+# The repo root ignores *.log (build logs everywhere). The captured run
+# evidence is part of this example's deliverable, so re-include those.
+!evidence/**/*.log

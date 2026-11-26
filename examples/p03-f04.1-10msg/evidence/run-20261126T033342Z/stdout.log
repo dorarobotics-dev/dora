@@ -1,0 +1,51 @@
+counter: DEBUG    building node
+counter: INFO     running build command: `cargo build --manifest-path nodes/Cargo.toml --bins` in /Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg
+counter: stdout       Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+sender: DEBUG    building node
+sender: INFO     running build command: `cargo build --manifest-path nodes/Cargo.toml --bins` in /Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg
+sender: stdout       Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+2026-11-26T03:33:44.048666Z  INFO dora_daemon: zenoh session open with id a0b885e3f126aab3f8407be40c0eb826
+11:33:44 DEBUG  counter: daemon::spawner spawning node
+11:33:44 DEBUG  sender: daemon::spawner spawning node
+
+11:33:44 INFO   [dora]: dora daemon finished building nodes, spawning...
+
+11:33:44 INFO   counter: spawner spawning `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg/nodes/target/debug/counter` in `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg`
+11:33:44 DEBUG  counter: spawner spawned node with pid 17227
+11:33:44 INFO   sender: spawner spawning `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg/nodes/target/debug/sender` in `/Volumes/EchoMacData/Dev/Dora/DoRobot-org/dora/examples/p03-f04.1-10msg`
+11:33:44 DEBUG  sender: spawner spawned node with pid 17228
+11:33:46 INFO   counter: daemon node is ready
+11:33:47 INFO   sender: daemon node is ready
+11:33:47 INFO   [dora]: daemon all nodes are ready, starting dataflow
+11:33:47 stdout sender: [SENT] seq=1
+11:33:47 stdout counter: [RECV] #1 seq=1
+11:33:47 stdout sender: [SENT] seq=2
+11:33:47 stdout counter: [RECV] #2 seq=2
+11:33:47 stdout sender: [SENT] seq=3
+11:33:47 stdout counter: [RECV] #3 seq=3
+11:33:48 stdout sender: [SENT] seq=4
+11:33:48 stdout counter: [RECV] #4 seq=4
+11:33:48 stdout sender: [SENT] seq=5
+11:33:48 stdout counter: [RECV] #5 seq=5
+11:33:48 stdout sender: [SENT] seq=6
+11:33:48 stdout counter: [RECV] #6 seq=6
+11:33:48 stdout sender: [SENT] seq=7
+11:33:48 stdout counter: [RECV] #7 seq=7
+11:33:48 stdout sender: [SENT] seq=8
+11:33:48 stdout counter: [RECV] #8 seq=8
+11:33:48 stdout sender: [SENT] seq=9
+11:33:48 stdout counter: [RECV] #9 seq=9
+11:33:48 stdout sender: [SENT] seq=10
+11:33:48 stdout sender: [SENT_TOTAL=10]
+11:33:48 stdout counter: [RECV] #10 seq=10
+11:33:48 stdout counter: [RECV_TOTAL=10] sequence_ok=true
+2026-11-26T03:33:54.048893Z  INFO dora_daemon: stop-after timeout reached (10s) -> stopping dataflow
+2026-11-26T03:33:54.049064Z  INFO run_inner: dora_daemon: stopping after 10s as requested health_check_interval_duration=None self.daemon_id=DaemonId { machine_id: None, uuid: 01a215ea-91ef-72e3-a51b-230865c0931b }
+11:33:54 stdout sender: [SENDER_DONE] sent=10
+11:33:54 stdout counter: [COUNTER_DONE] received=10 expected=10 sequence_ok=true
+11:33:54 DEBUG  counter: daemon handling node stop with exit status Success (restart: false, restart_count: 0)
+11:33:54 INFO   counter: daemon counter finished successfully
+11:33:54 DEBUG  sender: daemon handling node stop with exit status Success (restart: false, restart_count: 0)
+11:33:54 INFO   sender: daemon sender finished successfully
+11:33:54 INFO   [dora]: daemon dataflow finished on machine `01a215ea-91ef-72e3-a51b-230865c0931b`
+2026-11-26T03:33:54.057302Z  INFO run_inner: dora_daemon: exiting daemon because all required dataflows are finished health_check_interval_duration=None self.daemon_id=DaemonId { machine_id: None, uuid: 01a215ea-91ef-72e3-a51b-230865c0931b }
